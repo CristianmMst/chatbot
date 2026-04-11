@@ -1,10 +1,26 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Center, OrbitControls, useAnimations, useGLTF } from "@react-three/drei";
-import type { Group } from "three";
+import type { AnimationClip, Group, Object3D } from "three";
 import { siteConfig } from "@/lib/site";
+
+function getTrackTargetName(trackName: string) {
+  return trackName.split(".")[0]?.trim() ?? "";
+}
+
+function clipTargetsExist(root: Object3D, clip: AnimationClip) {
+  return clip.tracks.every((track) => {
+    const targetName = getTrackTargetName(track.name);
+
+    if (!targetName || targetName === root.name) {
+      return true;
+    }
+
+    return root.getObjectByName(targetName) !== undefined;
+  });
+}
 
 function usePrefersReducedMotion() {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
@@ -31,16 +47,17 @@ function usePrefersReducedMotion() {
 function AvatarModel() {
   const group = useRef<Group>(null);
   const { scene, animations } = useGLTF(siteConfig.modelPath);
-  const { actions, names } = useAnimations(animations, group);
+  const { actions } = useAnimations(animations, group);
+  const compatibleClipName = useMemo(() => {
+    return animations.find((clip) => clipTargetsExist(scene, clip))?.name;
+  }, [animations, scene]);
 
   useEffect(() => {
-    const firstAnimation = names[0];
-
-    if (!firstAnimation) {
+    if (!compatibleClipName) {
       return;
     }
 
-    const action = actions[firstAnimation];
+    const action = actions[compatibleClipName];
 
     if (!action) {
       return;
@@ -51,7 +68,7 @@ function AvatarModel() {
     return () => {
       action.fadeOut(0.25);
     };
-  }, [actions, names]);
+  }, [actions, compatibleClipName]);
 
   return (
     <Center>
