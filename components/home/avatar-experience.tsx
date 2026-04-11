@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AvatarViewer from "@/components/scene/avatar-viewer";
 import {
   defaultFacialControls,
@@ -8,14 +8,115 @@ import {
   facialPresets,
   type FacialControls,
 } from "@/lib/avatar-face";
+import { useVoiceConversation, type VoiceStatus } from "@/components/home/use-voice-conversation";
 
 const facialControlKeys = Object.keys(defaultFacialControls) as Array<keyof FacialControls>;
 
+function getStatusCopy(status: VoiceStatus) {
+  switch (status) {
+    case "listening":
+      return "Escuchando";
+    case "processing":
+      return "Procesando";
+    case "speaking":
+      return "Hablando";
+    case "error":
+      return "Error de voz";
+    case "unsupported":
+      return "No compatible";
+    default:
+      return "Lista para escuchar";
+  }
+}
+
+function getVoiceFacialControls(status: VoiceStatus, jawOpen: number): FacialControls {
+  switch (status) {
+    case "listening":
+      return {
+        smile: 0.1,
+        browsUp: 0.35,
+        browsDown: 0,
+        blink: 0,
+        jawOpen: 0.03,
+        frown: 0,
+      };
+    case "processing":
+      return {
+        smile: 0,
+        browsUp: 0.08,
+        browsDown: 0,
+        blink: 0,
+        jawOpen: 0,
+        frown: 0,
+      };
+    case "speaking":
+      return {
+        smile: 0.2,
+        browsUp: 0.12,
+        browsDown: 0,
+        blink: 0,
+        jawOpen,
+        frown: 0,
+      };
+    case "error":
+      return {
+        smile: 0,
+        browsUp: 0,
+        browsDown: 0.2,
+        blink: 0,
+        jawOpen: 0,
+        frown: 0.25,
+      };
+    default:
+      return defaultFacialControls;
+  }
+}
+
 export default function AvatarExperience() {
-  const [facialControls, setFacialControls] = useState(defaultFacialControls);
+  const [manualFacialControls, setManualFacialControls] = useState(defaultFacialControls);
+  const [jawPhase, setJawPhase] = useState(0);
+  const {
+    errorMessage,
+    hasResolvedSupport,
+    isSupported,
+    reply,
+    startListening,
+    status,
+    stopAll,
+    transcript,
+  } = useVoiceConversation();
+
+  useEffect(() => {
+    if (status !== "speaking") {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setJawPhase((current) => (current + 1) % 4);
+    }, 140);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [status]);
+
+  const jawOpen = status === "speaking" && jawPhase % 2 !== 0 ? 0.48 : 0.16;
+  const voiceFacialControls = useMemo(
+    () => getVoiceFacialControls(status, jawOpen),
+    [jawOpen, status],
+  );
+  const facialControls = status === "idle" || status === "unsupported"
+    ? manualFacialControls
+    : voiceFacialControls;
+  const helperMessage = errorMessage ??
+    (!hasResolvedSupport
+      ? "Comprobando compatibilidad de voz del navegador..."
+      : isSupported
+        ? "Usa Chrome o Edge para la prueba mas estable. Pulsa el microfono y di una frase corta."
+        : "Este navegador no expone una implementacion usable de Web Speech API para esta demo.");
 
   function updateControl(control: keyof FacialControls, value: number) {
-    setFacialControls((current) => ({
+    setManualFacialControls((current) => ({
       ...current,
       [control]: value,
     }));
@@ -25,6 +126,89 @@ export default function AvatarExperience() {
     <>
       <div className="absolute inset-0 z-0">
         <AvatarViewer facialControls={facialControls} />
+      </div>
+
+      <div className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between p-6 sm:p-10">
+        <header className="flex justify-center sm:justify-start">
+          <div className="flex items-center gap-3 opacity-40 transition-opacity hover:opacity-100">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/5 ring-1 ring-white/10 backdrop-blur-md">
+              <span className="text-[10px] font-bold tracking-[0.3em] text-white">AV</span>
+            </div>
+            <span className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-400">
+              Aura Voice
+            </span>
+          </div>
+        </header>
+
+        <div className="flex flex-col items-center justify-end gap-6 pb-4 sm:pb-8">
+          <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-white/5 bg-black/20 px-5 py-2 backdrop-blur-xl transition-all">
+            <span className="relative flex h-2.5 w-2.5">
+              <span
+                className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${status === "listening" ? "animate-ping bg-cyan-300" : "bg-emerald-400"}`}
+              />
+              <span
+                className={`relative inline-flex h-2.5 w-2.5 rounded-full ${status === "error" ? "bg-rose-500" : status === "unsupported" ? "bg-amber-400" : status === "speaking" ? "bg-fuchsia-400" : "bg-emerald-500"}`}
+              />
+            </span>
+            <span className="text-xs font-medium tracking-wide text-zinc-300">
+              {getStatusCopy(status)}
+            </span>
+          </div>
+
+          <div className="pointer-events-auto w-full max-w-xl rounded-3xl border border-white/10 bg-black/30 p-4 text-white shadow-2xl shadow-black/30 backdrop-blur-2xl">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <section className="space-y-2 rounded-2xl bg-white/5 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-300/80">
+                  Te escuche
+                </p>
+                <p className="min-h-12 text-sm text-zinc-100/90">
+                  {transcript || "Todavia no hay transcripcion."}
+                </p>
+              </section>
+
+              <section className="space-y-2 rounded-2xl bg-white/5 p-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-fuchsia-300/80">
+                  Respuesta local
+                </p>
+                <p className="min-h-12 text-sm text-zinc-100/90">
+                  {reply || "La respuesta sintetizada aparecera aqui."}
+                </p>
+              </section>
+            </div>
+
+            <div className="mt-4 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+              <button
+                aria-label={status === "listening" ? "Detener escucha" : "Hablar"}
+                className="group relative flex h-20 w-20 items-center justify-center rounded-full bg-white/5 text-zinc-300 ring-1 ring-white/10 backdrop-blur-2xl transition-all hover:scale-105 hover:bg-white/10 hover:text-white hover:ring-white/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!hasResolvedSupport || !isSupported || status === "processing"}
+                onClick={status === "listening" || status === "speaking" ? stopAll : startListening}
+                type="button"
+              >
+                <div className="absolute inset-0 rounded-full bg-white/5 opacity-0 blur-xl transition-opacity group-hover:opacity-100" />
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="28"
+                  height="28"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="relative z-10 transition-transform group-hover:scale-110"
+                >
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" x2="12" y1="19" y2="22" />
+                </svg>
+              </button>
+
+              <div className="max-w-sm text-center text-xs text-zinc-400 sm:text-left">
+                {helperMessage}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <aside className="pointer-events-auto absolute inset-x-4 bottom-28 z-20 sm:inset-x-auto sm:bottom-8 sm:right-8 sm:w-80">
@@ -40,7 +224,7 @@ export default function AvatarExperience() {
             </div>
             <button
               className="rounded-full border border-white/10 px-3 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-white/20 hover:text-white"
-              onClick={() => setFacialControls(defaultFacialControls)}
+              onClick={() => setManualFacialControls(defaultFacialControls)}
               type="button"
             >
               Reset
@@ -52,7 +236,7 @@ export default function AvatarExperience() {
               <button
                 key={preset.label}
                 className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:border-cyan-300/40 hover:bg-cyan-300/10 hover:text-white"
-                onClick={() => setFacialControls(preset.controls)}
+                onClick={() => setManualFacialControls(preset.controls)}
                 type="button"
               >
                 {preset.label}
@@ -66,7 +250,7 @@ export default function AvatarExperience() {
                 <div className="mb-1 flex items-center justify-between text-xs text-zinc-300">
                   <span>{facialControlLabels[control]}</span>
                   <span className="tabular-nums text-zinc-500">
-                    {facialControls[control].toFixed(2)}
+                    {manualFacialControls[control].toFixed(2)}
                   </span>
                 </div>
                 <input
@@ -77,7 +261,7 @@ export default function AvatarExperience() {
                   onChange={(event) => updateControl(control, Number(event.target.value))}
                   step="0.01"
                   type="range"
-                  value={facialControls[control]}
+                  value={manualFacialControls[control]}
                 />
               </label>
             ))}

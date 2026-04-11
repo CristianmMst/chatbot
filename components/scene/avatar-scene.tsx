@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { Center, OrbitControls, useAnimations, useGLTF } from "@react-three/drei";
 import { Box3, MathUtils, Vector3 } from "three";
@@ -93,6 +93,9 @@ function AvatarModel({
   const compatibleClipName = useMemo(() => {
     return animations.find((clip) => clipTargetsExist(scene, clip))?.name;
   }, [animations, scene]);
+  const notifyFocusTargetChange = useEffectEvent((target: [number, number, number]) => {
+    onFocusTargetChange?.(target);
+  });
   const targetInfluences = useMemo(
     () => getTargetInfluences(facialControls),
     [facialControls],
@@ -112,8 +115,8 @@ function AvatarModel({
     const alignedHeadY = headPosition.y - bounds.min.y;
     const alignedHeadZ = headPosition.z;
 
-    onFocusTargetChange?.([0, alignedHeadY, alignedHeadZ]);
-  }, [onFocusTargetChange, scene]);
+    notifyFocusTargetChange([0, alignedHeadY, alignedHeadZ]);
+  }, [scene]);
 
   useEffect(() => {
     if (!compatibleClipName) {
