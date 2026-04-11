@@ -1,10 +1,32 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame } from "@react-three/fiber";
 import { Center, OrbitControls, useAnimations, useGLTF } from "@react-three/drei";
-import type { AnimationClip, Group, Object3D } from "three";
+import { Box3, MathUtils, Vector3 } from "three";
+import type { AnimationClip, Group, Mesh, Object3D } from "three";
+import {
+  defaultFacialControls,
+  facialTargetMap,
+  trackedFacialTargets,
+  type FacialControls,
+} from "@/lib/avatar-face";
 import { siteConfig } from "@/lib/site";
+
+type AvatarSceneProps = {
+  facialControls?: FacialControls;
+};
+
+type AvatarModelProps = AvatarSceneProps & {
+  onFocusTargetChange?: (target: [number, number, number]) => void;
+};
+
+type MorphMesh = Mesh & {
+  morphTargetDictionary: Record<string, number>;
+  morphTargetInfluences: number[];
+};
+
+const FACIAL_SMOOTHING = 12;
 
 function getTrackTargetName(trackName: string) {
   return trackName.split(".")[0]?.trim() ?? "";
@@ -22,35 +44,76 @@ function clipTargetsExist(root: Object3D, clip: AnimationClip) {
   });
 }
 
-function usePrefersReducedMotion() {
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-
-    const updatePreference = () => {
-      setPrefersReducedMotion(mediaQuery.matches);
-    };
-
-    updatePreference();
-
-    mediaQuery.addEventListener("change", updatePreference);
-
-    return () => {
-      mediaQuery.removeEventListener("change", updatePreference);
-    };
-  }, []);
-
-  return prefersReducedMotion;
+function clampControlValue(value: number | undefined) {
+  return MathUtils.clamp(value ?? 0, 0, 1);
 }
 
-function AvatarModel() {
+function collectMorphMeshes(root: Object3D) {
+  const morphMeshes: MorphMesh[] = [];
+
+  root.traverse((object) => {
+    const mesh = object as Partial<MorphMesh>;
+
+    if (!mesh.morphTargetDictionary || !mesh.morphTargetInfluences) {
+      return;
+    }
+
+    morphMeshes.push(mesh as MorphMesh);
+  });
+
+  return morphMeshes;
+}
+
+function getTargetInfluences(facialControls: FacialControls) {
+  const influences = Object.fromEntries(
+    trackedFacialTargets.map((target) => [target, 0]),
+  ) as Record<string, number>;
+
+  for (const [control, targets] of Object.entries(facialTargetMap) as Array<
+    [keyof FacialControls, string[]]
+  >) {
+    const value = clampControlValue(facialControls[control]);
+
+    for (const target of targets) {
+      influences[target] = Math.max(influences[target] ?? 0, value);
+    }
+  }
+
+  return influences;
+}
+
+function AvatarModel({
+  facialControls = defaultFacialControls,
+  onFocusTargetChange,
+}: AvatarModelProps) {
   const group = useRef<Group>(null);
+  const morphMeshesRef = useRef<MorphMesh[]>([]);
   const { scene, animations } = useGLTF(siteConfig.modelPath);
   const { actions } = useAnimations(animations, group);
   const compatibleClipName = useMemo(() => {
     return animations.find((clip) => clipTargetsExist(scene, clip))?.name;
   }, [animations, scene]);
+  const targetInfluences = useMemo(
+    () => getTargetInfluences(facialControls),
+    [facialControls],
+  );
+
+  useEffect(() => {
+    morphMeshesRef.current = collectMorphMeshes(scene);
+
+    const bounds = new Box3().setFromObject(scene);
+    const headObject = scene.getObjectByName("Head") ?? scene.getObjectByName("Streamoji_Head");
+
+    if (!headObject) {
+      return;
+    }
+
+    const headPosition = headObject.getWorldPosition(new Vector3());
+    const alignedHeadY = headPosition.y - bounds.min.y;
+    const alignedHeadZ = headPosition.z;
+
+    onFocusTargetChange?.([0, alignedHeadY, alignedHeadZ]);
+  }, [onFocusTargetChange, scene]);
 
   useEffect(() => {
     if (!compatibleClipName) {
@@ -70,8 +133,29 @@ function AvatarModel() {
     };
   }, [actions, compatibleClipName]);
 
+  useFrame((_, delta) => {
+    for (const mesh of morphMeshesRef.current) {
+      for (const targetName of trackedFacialTargets) {
+        const targetIndex = mesh.morphTargetDictionary[targetName];
+
+        if (targetIndex === undefined) {
+          continue;
+        }
+
+        // Three.js stores morph weights imperatively on the mesh instance.
+        // eslint-disable-next-line react-hooks/immutability
+        mesh.morphTargetInfluences[targetIndex] = MathUtils.damp(
+          mesh.morphTargetInfluences[targetIndex] ?? 0,
+          targetInfluences[targetName] ?? 0,
+          FACIAL_SMOOTHING,
+          delta,
+        );
+      }
+    }
+  });
+
   return (
-    <Center>
+    <Center top>
       <group ref={group}>
         <primitive object={scene} />
       </group>
@@ -97,24 +181,29 @@ function SceneLights() {
   );
 }
 
-export default function AvatarScene() {
-  const prefersReducedMotion = usePrefersReducedMotion();
+export default function AvatarScene({ facialControls }: AvatarSceneProps) {
+  const [focusTarget, setFocusTarget] = useState<[number, number, number]>([
+    0,
+    1.64,
+    0.01,
+  ]);
 
   return (
     <div className="absolute inset-0 bg-transparent">
-      <Canvas camera={{ fov: 32, position: [0, 1.15, 4.2] }} dpr={[1, 1.5]}>
+      <Canvas camera={{ fov: 26, position: [0, 1.64, 3.15] }} dpr={[1, 1.5]}>
         <SceneLights />
         <Suspense fallback={null}>
-          <AvatarModel />
+          <AvatarModel facialControls={facialControls} onFocusTargetChange={setFocusTarget} />
         </Suspense>
         <OrbitControls
-          autoRotate={!prefersReducedMotion}
-          autoRotateSpeed={0.6}
           enableDamping
           enablePan={false}
-          enableZoom={false}
-          maxPolarAngle={Math.PI / 1.8}
-          minPolarAngle={Math.PI / 3.5}
+          enableZoom
+          maxDistance={4.2}
+          minDistance={1.35}
+          maxPolarAngle={Math.PI / 1.85}
+          minPolarAngle={Math.PI / 2.3}
+          target={focusTarget}
         />
       </Canvas>
     </div>
