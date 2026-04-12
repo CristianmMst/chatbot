@@ -83,6 +83,7 @@ export default function AvatarExperience() {
     reply,
     speechBoundarySupported,
     speechCharIndex,
+    speechProgress,
     speechStartedAt,
     speechText,
     startListening,
@@ -94,6 +95,7 @@ export default function AvatarExperience() {
     isSpeaking: status === "speaking",
     speechBoundarySupported,
     speechCharIndex,
+    speechProgress,
     speechStartedAt,
     speechText,
   });

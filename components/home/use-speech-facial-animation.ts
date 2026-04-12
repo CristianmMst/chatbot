@@ -7,6 +7,7 @@ type SpeechFacialAnimationInput = {
   isSpeaking: boolean;
   speechBoundarySupported: boolean;
   speechCharIndex: number;
+  speechProgress: number;
   speechStartedAt: number | null;
   speechText: string;
 };
@@ -46,10 +47,13 @@ function getCurrentCharacter(
   speechText: string,
   speechCharIndex: number,
   speechBoundarySupported: boolean,
+  speechProgress: number,
   speechStartedAt: number | null,
   now: number,
 ) {
-  const fallbackIndex = getEstimatedSpeechCharIndex(speechText, speechStartedAt, now);
+  const fallbackIndex = speechProgress > 0
+    ? Math.min(speechText.length, Math.floor(speechText.length * speechProgress))
+    : getEstimatedSpeechCharIndex(speechText, speechStartedAt, now);
   const index = speechBoundarySupported ? speechCharIndex : fallbackIndex;
   return speechText[index]?.toLowerCase() ?? "";
 }
@@ -127,6 +131,7 @@ export function useSpeechFacialAnimation({
   isSpeaking,
   speechBoundarySupported,
   speechCharIndex,
+  speechProgress,
   speechStartedAt,
   speechText,
 }: SpeechFacialAnimationInput) {
@@ -161,10 +166,11 @@ export function useSpeechFacialAnimation({
       speechText,
       speechCharIndex,
       speechBoundarySupported,
+      speechProgress,
       speechStartedAt,
       now,
     );
 
     return sanitizeTargets(getSpeechPose(currentCharacter, phase));
-  }, [isSpeaking, now, speechBoundarySupported, speechCharIndex, speechStartedAt, speechText]);
+  }, [isSpeaking, now, speechBoundarySupported, speechCharIndex, speechProgress, speechStartedAt, speechText]);
 }

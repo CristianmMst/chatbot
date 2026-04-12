@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 type VoiceStatus = "idle" | "listening" | "processing" | "speaking" | "error" | "unsupported";
 
@@ -17,6 +17,7 @@ type VoiceConversationState = {
   reply: string;
   speechBoundarySupported: boolean;
   speechCharIndex: number;
+  speechProgress: number;
   speechStartedAt: number | null;
   speechText: string;
   startListening: () => void;
@@ -129,6 +130,28 @@ async function requestChatReply(message: string, history: ConversationMessage[])
   return payload.reply;
 }
 
+async function requestSpeechAudio(text: string) {
+  const response = await fetch("/api/tts", {
+    body: JSON.stringify({ text }),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+
+    throw new Error(
+      payload && typeof payload.error === "string"
+        ? payload.error
+        : "La voz sintetizada de ElevenLabs fallo.",
+    );
+  }
+
+  return response.blob();
+}
+
 export function useVoiceConversation(): VoiceConversationState {
   const recognitionCtor = useSyncExternalStore(
     subscribeToBrowserFeatures,
@@ -144,7 +167,7 @@ export function useVoiceConversation(): VoiceConversationState {
     hasResolvedSupport &&
     recognitionCtor !== null &&
     typeof window !== "undefined" &&
-    "speechSynthesis" in window;
+    typeof window.Audio !== "undefined";
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [transcript, setTranscript] = useState("");
   const [reply, setReply] = useState("");
@@ -152,13 +175,44 @@ export function useVoiceConversation(): VoiceConversationState {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [speechText, setSpeechText] = useState("");
   const [speechCharIndex, setSpeechCharIndex] = useState(0);
+  const [speechProgress, setSpeechProgress] = useState(0);
   const [speechStartedAt, setSpeechStartedAt] = useState<number | null>(null);
   const [speechBoundarySupported, setSpeechBoundarySupported] = useState(false);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const activeAudioUrlRef = useRef<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const finalTranscriptRef = useRef("");
   const shouldHandleResultRef = useRef(false);
   const statusRef = useRef<VoiceStatus>("idle");
   const historyRef = useRef<ConversationMessage[]>([]);
+
+  const clearActiveAudioUrl = useCallback(() => {
+    if (!activeAudioUrlRef.current) {
+      return;
+    }
+
+    URL.revokeObjectURL(activeAudioUrlRef.current);
+    activeAudioUrlRef.current = null;
+  }, []);
+
+  function resetSpeechState() {
+    setSpeechCharIndex(0);
+    setSpeechProgress(0);
+    setSpeechStartedAt(null);
+    setSpeechBoundarySupported(false);
+  }
+
+  const stopCurrentAudio = useCallback(() => {
+    if (!audioRef.current) {
+      clearActiveAudioUrl();
+      return;
+    }
+
+    audioRef.current.pause();
+    audioRef.current.src = "";
+    audioRef.current = null;
+    clearActiveAudioUrl();
+  }, [clearActiveAudioUrl]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -240,61 +294,44 @@ export function useVoiceConversation(): VoiceConversationState {
             return nextHistory.slice(-6);
           });
 
-          if (!("speechSynthesis" in window)) {
-            setStatus("unsupported");
-            return;
-          }
+          const speechAudioBlob = await requestSpeechAudio(nextReply);
+          const audioUrl = URL.createObjectURL(speechAudioBlob);
+          const audio = new Audio(audioUrl);
 
-          window.speechSynthesis.cancel();
+          stopCurrentAudio();
+          activeAudioUrlRef.current = audioUrl;
+          audioRef.current = audio;
+          setSpeechText(nextReply);
+          resetSpeechState();
 
-          const utterance = new SpeechSynthesisUtterance(nextReply);
-          utterance.lang = "es-ES";
-          utterance.rate = 1;
-          utterance.pitch = 1;
-
-          const availableVoices = window.speechSynthesis
-            .getVoices()
-            .filter((voice) => voice.lang.toLowerCase().startsWith("es"));
-
-          if (availableVoices[0]) {
-            utterance.voice = availableVoices[0];
-          }
-
-          utterance.onstart = () => {
-            setSpeechText(nextReply);
-            setSpeechCharIndex(0);
+          audio.preload = "auto";
+          audio.onplay = () => {
             setSpeechStartedAt(Date.now());
-            setSpeechBoundarySupported(false);
             setStatus("speaking");
           };
+          audio.ontimeupdate = () => {
+            const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
+            const progress = duration > 0 ? Math.min(audio.currentTime / duration, 1) : 0;
 
-          utterance.onboundary = (event) => {
-            if (typeof event.charIndex !== "number") {
-              return;
-            }
-
-            setSpeechBoundarySupported(true);
-            setSpeechCharIndex(event.charIndex);
+            setSpeechProgress(progress);
+            setSpeechCharIndex(Math.min(nextReply.length, Math.floor(nextReply.length * progress)));
           };
-
-          utterance.onend = () => {
-            setSpeechCharIndex(0);
-            setSpeechStartedAt(null);
-            setSpeechBoundarySupported(false);
+          audio.onended = () => {
+            resetSpeechState();
             setStatus("idle");
+            stopCurrentAudio();
           };
-
-          utterance.onerror = () => {
-            setErrorMessage("La voz sintetizada del navegador fallo.");
-            setSpeechCharIndex(0);
-            setSpeechStartedAt(null);
-            setSpeechBoundarySupported(false);
+          audio.onerror = () => {
+            resetSpeechState();
+            setErrorMessage("La reproduccion del audio de ElevenLabs fallo.");
             setStatus("error");
+            stopCurrentAudio();
           };
 
-          window.speechSynthesis.speak(utterance);
+          await audio.play();
         } catch (error) {
           setErrorMessage(error instanceof Error ? error.message : "La respuesta del asistente fallo.");
+          resetSpeechState();
           setStatus("error");
         }
       })();
@@ -307,27 +344,16 @@ export function useVoiceConversation(): VoiceConversationState {
       recognition.onerror = null;
       recognition.onresult = null;
       recognition.stop();
+      stopCurrentAudio();
       recognitionRef.current = null;
     };
-  }, [recognitionCtor]);
+  }, [recognitionCtor, stopCurrentAudio]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      return;
-    }
-
-    const handleVoicesChanged = () => {
-      window.speechSynthesis.getVoices();
-    };
-
-    window.speechSynthesis.addEventListener("voiceschanged", handleVoicesChanged);
-    handleVoicesChanged();
-
     return () => {
-      window.speechSynthesis.removeEventListener("voiceschanged", handleVoicesChanged);
-      window.speechSynthesis.cancel();
+      stopCurrentAudio();
     };
-  }, []);
+  }, [stopCurrentAudio]);
 
   function startListening() {
     if (!recognitionRef.current || !isSupported) {
@@ -335,15 +361,13 @@ export function useVoiceConversation(): VoiceConversationState {
       return;
     }
 
-    window.speechSynthesis.cancel();
+    stopCurrentAudio();
     finalTranscriptRef.current = "";
     shouldHandleResultRef.current = true;
     setErrorMessage(null);
     setReply("");
     setSpeechText("");
-    setSpeechCharIndex(0);
-    setSpeechStartedAt(null);
-    setSpeechBoundarySupported(false);
+    resetSpeechState();
     setTranscript("");
     setStatus("listening");
 
@@ -359,13 +383,8 @@ export function useVoiceConversation(): VoiceConversationState {
     shouldHandleResultRef.current = false;
     recognitionRef.current?.stop();
 
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
-
-    setSpeechCharIndex(0);
-    setSpeechStartedAt(null);
-    setSpeechBoundarySupported(false);
+    stopCurrentAudio();
+    resetSpeechState();
     setStatus(isSupported ? "idle" : "unsupported");
   }
 
@@ -379,6 +398,7 @@ export function useVoiceConversation(): VoiceConversationState {
     reply,
     speechBoundarySupported,
     speechCharIndex,
+    speechProgress,
     speechStartedAt,
     speechText,
     startListening,
