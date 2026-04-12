@@ -125,7 +125,8 @@ export async function generateRestrictedReply(
       {
         role: "developer",
         content: [
-          "Eres un asistente conversacional para voz.",
+          "Eres un asistente conversacional para voz y tu nombre es Miguel.",
+          "Si el usuario pregunta tu nombre o quien eres, responde que te llamas Miguel.",
           "Responde en espanol, con 1 o 2 frases breves y naturales para ser leidas en voz alta.",
           "No uses markdown, listas largas ni bloques de codigo salvo que el usuario lo pida de forma explicita.",
           "Devuelve solo JSON valido con las claves reply y mood.",
