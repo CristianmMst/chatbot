@@ -1,4 +1,4 @@
-export type LlmProvider = "custom" | "groq" | "openai" | "openrouter" | "together";
+export type LlmProvider = "custom" | "gemini" | "groq" | "openai" | "openrouter" | "together";
 
 type LlmConfig = {
   apiKey: string | null;
@@ -9,6 +9,8 @@ type LlmConfig = {
 
 function normalizeProvider(value: string | undefined): LlmProvider {
   switch (value?.toLowerCase()) {
+    case "gemini":
+      return "gemini";
     case "groq":
       return "groq";
     case "openai":
@@ -18,12 +20,14 @@ function normalizeProvider(value: string | undefined): LlmProvider {
     case "together":
       return "together";
     default:
-      return "custom";
+      return "gemini";
   }
 }
 
 function getDefaultBaseURL(provider: LlmProvider) {
   switch (provider) {
+    case "gemini":
+      return "https://generativelanguage.googleapis.com/v1beta/openai/";
     case "groq":
       return "https://api.groq.com/openai/v1";
     case "openrouter":
@@ -37,6 +41,8 @@ function getDefaultBaseURL(provider: LlmProvider) {
 
 function getDefaultModel(provider: LlmProvider) {
   switch (provider) {
+    case "gemini":
+      return "gemini-2.5-flash";
     case "groq":
       return "llama-3.3-70b-versatile";
     case "openrouter":
@@ -54,7 +60,11 @@ export function getLlmConfig(): LlmConfig {
   const provider = normalizeProvider(process.env.LLM_PROVIDER);
 
   return {
-    apiKey: process.env.LLM_API_KEY ?? process.env.OPENAI_API_KEY ?? null,
+    apiKey:
+      process.env.LLM_API_KEY ??
+      process.env.GEMINI_API_KEY ??
+      process.env.OPENAI_API_KEY ??
+      null,
     baseURL: process.env.LLM_BASE_URL ?? getDefaultBaseURL(provider),
     model: process.env.LLM_MODEL ?? getDefaultModel(provider),
     provider,

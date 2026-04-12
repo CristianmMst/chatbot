@@ -25,46 +25,57 @@ export function sanitizeHistory(history: ChatMessage[] | undefined) {
     .slice(-6);
 }
 
+const replyFieldKeys = [
+  "reply",
+  "respuesta",
+  "answer",
+  "message",
+  "texto",
+  "contenido",
+  "presentacion",
+  "saludo",
+  "introduccion",
+  "descripcion",
+];
+
+function normalizeTextValue(value: unknown) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  if (Array.isArray(value)) {
+    const parts = value.map(normalizeTextValue).filter((item): item is string => item !== null);
+    return parts.length > 0 ? parts.join(". ") : null;
+  }
+
+  return null;
+}
+
 function formatStructuredFields(parsed: Record<string, unknown>) {
-  const entries = Object.entries(parsed).filter(([key]) => {
-    return !["reply", "respuesta", "answer", "message", "mood"].includes(key);
-  });
+  const entries = Object.entries(parsed).filter(([key]) => !["mood"].includes(key));
 
   if (entries.length === 0) {
     return null;
   }
 
+  const preferredParts = replyFieldKeys
+    .map((key) => normalizeTextValue(parsed[key]))
+    .filter((part): part is string => part !== null);
+
+  if (preferredParts.length > 0) {
+    return Array.from(new Set(preferredParts)).join(". ");
+  }
+
   const parts = entries
-    .map(([key, value]) => {
-      const normalizedKey = key.replace(/_/g, " ");
-
-      if (Array.isArray(value)) {
-        const items = value.filter((item) => item !== null && item !== undefined).map(String);
-
-        if (items.length === 0) {
-          return null;
-        }
-
-        return `${normalizedKey}: ${items.join(", ")}`;
-      }
-
-      if (typeof value === "object" && value !== null) {
-        return `${normalizedKey}: ${JSON.stringify(value)}`;
-      }
-
-      if (value === null || value === undefined) {
-        return null;
-      }
-
-      return `${normalizedKey}: ${String(value)}`;
-    })
-    .filter((part): part is string => Boolean(part));
+    .map(([, value]) => normalizeTextValue(value))
+    .filter((part): part is string => part !== null);
 
   if (parts.length === 0) {
     return null;
   }
 
-  return parts.join(". ");
+  return Array.from(new Set(parts)).join(". ");
 }
 
 function parseStructuredReply(payload: string): StructuredReply | null {
@@ -102,9 +113,14 @@ function parseStructuredReply(payload: string): StructuredReply | null {
 export function getMissingLlmConfigMessage() {
   const config = getLlmConfig();
 
-  return config.provider === "custom"
-    ? "Falta configurar LLM_API_KEY en el servidor."
-    : `Falta configurar LLM_API_KEY para el proveedor ${config.provider}.`;
+  switch (config.provider) {
+    case "gemini":
+      return "Falta configurar GEMINI_API_KEY o LLM_API_KEY para Gemini en el servidor.";
+    case "custom":
+      return "Falta configurar una clave LLM_API_KEY en el servidor.";
+    default:
+      return `Falta configurar LLM_API_KEY para el proveedor ${config.provider}.`;
+  }
 }
 
 export async function generateRestrictedReply(
@@ -118,16 +134,21 @@ export async function generateRestrictedReply(
   }
 
   const config = getLlmConfig();
+  const instructionRole = config.provider === "gemini" ? "system" : "developer";
   const completion = await client.chat.completions.create({
     model: config.model,
-    temperature: 0.2,
+    temperature: 0.4,
     messages: [
       {
-        role: "developer",
+        role: instructionRole,
         content: [
-          "Eres un asistente conversacional para voz y tu nombre es Miguel.",
-          "Si el usuario pregunta tu nombre o quien eres, responde que te llamas Miguel.",
-          "Responde en espanol, con 1 o 2 frases breves y naturales para ser leidas en voz alta.",
+          "Eres un asistente conversacional para voz llamado Miguel.",
+          "Sigue la instruccion directa del usuario con la mayor fidelidad posible, salvo que sea insegura o imposible.",
+          "Si el usuario pregunta tu nombre, quien eres o como debe llamarte, responde claramente que te llamas Miguel.",
+          "Responde siempre en espanol, con tono natural y util para ser leido en voz alta.",
+          "Por defecto responde de forma breve, pero si el usuario pide mas detalle, explicacion o una respuesta larga, concedelo.",
+          "Si no sabes algo o te falta contexto, dilo con honestidad en lugar de inventar.",
+          "No cambies de tema ni rechaces preguntas normales del usuario sin motivo.",
           "No uses markdown, listas largas ni bloques de codigo salvo que el usuario lo pida de forma explicita.",
           "Devuelve solo JSON valido con las claves reply y mood.",
           "mood debe ser friendly, neutral o serious.",

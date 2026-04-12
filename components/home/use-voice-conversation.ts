@@ -26,8 +26,6 @@ type VoiceConversationState = {
 };
 
 type ChatReplyPayload = {
-  hasSufficientContext: boolean;
-  inDomain: boolean;
   mood: "friendly" | "neutral" | "serious";
   reply: string;
 };
