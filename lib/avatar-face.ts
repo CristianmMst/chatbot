@@ -7,6 +7,31 @@ export type FacialControls = {
   frown: number;
 };
 
+export type FacialTargetKey =
+  | "browDownLeft"
+  | "browDownRight"
+  | "browInnerUp"
+  | "browOuterUpLeft"
+  | "browOuterUpRight"
+  | "eyeBlinkLeft"
+  | "eyeBlinkRight"
+  | "jawOpen"
+  | "mouthClose"
+  | "mouthFrownLeft"
+  | "mouthFrownRight"
+  | "mouthFunnel"
+  | "mouthLowerDownLeft"
+  | "mouthLowerDownRight"
+  | "mouthPucker"
+  | "mouthSmileLeft"
+  | "mouthSmileRight"
+  | "mouthStretchLeft"
+  | "mouthStretchRight"
+  | "mouthUpperUpLeft"
+  | "mouthUpperUpRight";
+
+export type FacialTargetOverrides = Partial<Record<FacialTargetKey, number>>;
+
 export const defaultFacialControls: FacialControls = {
   smile: 0,
   browsUp: 0,
@@ -74,6 +99,19 @@ export const facialTargetMap: Record<keyof FacialControls, string[]> = {
   frown: ["mouthFrownLeft", "mouthFrownRight"],
 };
 
-export const trackedFacialTargets = Array.from(
-  new Set(Object.values(facialTargetMap).flat()),
-);
+export const speechTargetKeys: FacialTargetKey[] = [
+  "jawOpen",
+  "mouthClose",
+  "mouthFunnel",
+  "mouthPucker",
+  "mouthStretchLeft",
+  "mouthStretchRight",
+  "mouthLowerDownLeft",
+  "mouthLowerDownRight",
+  "mouthUpperUpLeft",
+  "mouthUpperUpRight",
+];
+
+export const trackedFacialTargets: FacialTargetKey[] = Array.from(
+  new Set([...Object.values(facialTargetMap).flat(), ...speechTargetKeys]),
+) as FacialTargetKey[];

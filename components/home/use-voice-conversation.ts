@@ -4,15 +4,32 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 type VoiceStatus = "idle" | "listening" | "processing" | "speaking" | "error" | "unsupported";
 
+type ConversationMessage = {
+  content: string;
+  role: "assistant" | "user";
+};
+
 type VoiceConversationState = {
   hasResolvedSupport: boolean;
+  history: ConversationMessage[];
   isSupported: boolean;
   errorMessage: string | null;
   reply: string;
+  speechBoundarySupported: boolean;
+  speechCharIndex: number;
+  speechStartedAt: number | null;
+  speechText: string;
   startListening: () => void;
   status: VoiceStatus;
   stopAll: () => void;
   transcript: string;
+};
+
+type ChatReplyPayload = {
+  hasSufficientContext: boolean;
+  inDomain: boolean;
+  mood: "friendly" | "neutral" | "serious";
+  reply: string;
 };
 
 type BrowserSpeechRecognition = {
@@ -74,28 +91,6 @@ function getHydrationSnapshot() {
   return true;
 }
 
-function getLocalReply(input: string) {
-  const normalized = input.toLowerCase();
-
-  if (normalized.includes("hola")) {
-    return "Hola. Ya puedo escucharte y responder con una voz sintetizada local.";
-  }
-
-  if (normalized.includes("como te llamas") || normalized.includes("quien eres")) {
-    return "Soy Aura Voice, una prueba local con Web Speech API y avatar 3D.";
-  }
-
-  if (normalized.includes("que puedes hacer") || normalized.includes("que haces")) {
-    return "Por ahora puedo escuchar tu voz, convertirla a texto y responder con una voz del navegador.";
-  }
-
-  if (normalized.includes("gracias")) {
-    return "Con gusto. Cuando quieras, vuelve a hablarme.";
-  }
-
-  return `Escuche: ${input}. Esta es una respuesta local simple mientras conectamos la inteligencia real.`;
-}
-
 function getSpeechErrorMessage(error: string) {
   switch (error) {
     case "audio-capture":
@@ -109,6 +104,31 @@ function getSpeechErrorMessage(error: string) {
     default:
       return "La transcripcion por voz no pudo completarse.";
   }
+}
+
+async function requestChatReply(message: string, history: ConversationMessage[]) {
+  const response = await fetch("/api/chat", {
+    body: JSON.stringify({ history, message }),
+    headers: {
+      "Content-Type": "application/json",
+    },
+    method: "POST",
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | ChatReplyPayload
+    | { error?: string }
+    | null;
+
+  if (!response.ok || !payload || !("reply" in payload) || typeof payload.reply !== "string") {
+    throw new Error(
+      payload && "error" in payload && typeof payload.error === "string"
+        ? payload.error
+        : "No pude obtener una respuesta valida del servidor.",
+    );
+  }
+
+  return payload.reply;
 }
 
 export function useVoiceConversation(): VoiceConversationState {
@@ -130,15 +150,25 @@ export function useVoiceConversation(): VoiceConversationState {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [transcript, setTranscript] = useState("");
   const [reply, setReply] = useState("");
+  const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [speechText, setSpeechText] = useState("");
+  const [speechCharIndex, setSpeechCharIndex] = useState(0);
+  const [speechStartedAt, setSpeechStartedAt] = useState<number | null>(null);
+  const [speechBoundarySupported, setSpeechBoundarySupported] = useState(false);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const finalTranscriptRef = useRef("");
   const shouldHandleResultRef = useRef(false);
   const statusRef = useRef<VoiceStatus>("idle");
+  const historyRef = useRef<ConversationMessage[]>([]);
 
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
 
   useEffect(() => {
     if (!recognitionCtor) {
@@ -198,43 +228,78 @@ export function useVoiceConversation(): VoiceConversationState {
       setTranscript(nextTranscript);
       setStatus("processing");
 
-      const nextReply = getLocalReply(nextTranscript);
-      setReply(nextReply);
+      void (async () => {
+        try {
+          const nextReply = await requestChatReply(nextTranscript, historyRef.current);
+          setReply(nextReply);
+          setHistory((current) => {
+            const nextHistory: ConversationMessage[] = [
+              ...current,
+              { content: nextTranscript, role: "user" },
+              { content: nextReply, role: "assistant" },
+            ];
 
-      if (!("speechSynthesis" in window)) {
-        setStatus("unsupported");
-        return;
-      }
+            return nextHistory.slice(-6);
+          });
 
-      window.speechSynthesis.cancel();
+          if (!("speechSynthesis" in window)) {
+            setStatus("unsupported");
+            return;
+          }
 
-      const utterance = new SpeechSynthesisUtterance(nextReply);
-      utterance.lang = "es-ES";
-      utterance.rate = 1;
-      utterance.pitch = 1;
+          window.speechSynthesis.cancel();
 
-      const availableVoices = window.speechSynthesis
-        .getVoices()
-        .filter((voice) => voice.lang.toLowerCase().startsWith("es"));
+          const utterance = new SpeechSynthesisUtterance(nextReply);
+          utterance.lang = "es-ES";
+          utterance.rate = 1;
+          utterance.pitch = 1;
 
-      if (availableVoices[0]) {
-        utterance.voice = availableVoices[0];
-      }
+          const availableVoices = window.speechSynthesis
+            .getVoices()
+            .filter((voice) => voice.lang.toLowerCase().startsWith("es"));
 
-      utterance.onstart = () => {
-        setStatus("speaking");
-      };
+          if (availableVoices[0]) {
+            utterance.voice = availableVoices[0];
+          }
 
-      utterance.onend = () => {
-        setStatus("idle");
-      };
+          utterance.onstart = () => {
+            setSpeechText(nextReply);
+            setSpeechCharIndex(0);
+            setSpeechStartedAt(Date.now());
+            setSpeechBoundarySupported(false);
+            setStatus("speaking");
+          };
 
-      utterance.onerror = () => {
-        setErrorMessage("La voz sintetizada del navegador fallo.");
-        setStatus("error");
-      };
+          utterance.onboundary = (event) => {
+            if (typeof event.charIndex !== "number") {
+              return;
+            }
 
-      window.speechSynthesis.speak(utterance);
+            setSpeechBoundarySupported(true);
+            setSpeechCharIndex(event.charIndex);
+          };
+
+          utterance.onend = () => {
+            setSpeechCharIndex(0);
+            setSpeechStartedAt(null);
+            setSpeechBoundarySupported(false);
+            setStatus("idle");
+          };
+
+          utterance.onerror = () => {
+            setErrorMessage("La voz sintetizada del navegador fallo.");
+            setSpeechCharIndex(0);
+            setSpeechStartedAt(null);
+            setSpeechBoundarySupported(false);
+            setStatus("error");
+          };
+
+          window.speechSynthesis.speak(utterance);
+        } catch (error) {
+          setErrorMessage(error instanceof Error ? error.message : "La respuesta del asistente fallo.");
+          setStatus("error");
+        }
+      })();
     };
 
     recognitionRef.current = recognition;
@@ -277,6 +342,10 @@ export function useVoiceConversation(): VoiceConversationState {
     shouldHandleResultRef.current = true;
     setErrorMessage(null);
     setReply("");
+    setSpeechText("");
+    setSpeechCharIndex(0);
+    setSpeechStartedAt(null);
+    setSpeechBoundarySupported(false);
     setTranscript("");
     setStatus("listening");
 
@@ -296,20 +365,24 @@ export function useVoiceConversation(): VoiceConversationState {
       window.speechSynthesis.cancel();
     }
 
+    setSpeechCharIndex(0);
+    setSpeechStartedAt(null);
+    setSpeechBoundarySupported(false);
     setStatus(isSupported ? "idle" : "unsupported");
   }
 
-  const resolvedStatus = !hasResolvedSupport
-    ? "idle"
-    : isSupported
-      ? status
-      : "unsupported";
+  const resolvedStatus = !hasResolvedSupport ? "idle" : isSupported ? status : "unsupported";
 
   return {
     errorMessage,
     hasResolvedSupport,
+    history,
     isSupported,
     reply,
+    speechBoundarySupported,
+    speechCharIndex,
+    speechStartedAt,
+    speechText,
     startListening,
     status: resolvedStatus,
     stopAll,

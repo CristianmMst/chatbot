@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { Component, type ReactNode } from "react";
-import type { FacialControls } from "@/lib/avatar-face";
+import type { FacialControls, FacialTargetOverrides } from "@/lib/avatar-face";
 
 type ErrorBoundaryProps = {
   children: ReactNode;
@@ -14,6 +14,7 @@ type ErrorBoundaryState = {
 
 type AvatarViewerProps = {
   facialControls?: FacialControls;
+  facialTargetOverrides?: FacialTargetOverrides;
 };
 
 const AvatarScene = dynamic(() => import("@/components/scene/avatar-scene"), {
@@ -77,11 +78,14 @@ function SceneErrorState() {
   );
 }
 
-export default function AvatarViewer({ facialControls }: AvatarViewerProps) {
+export default function AvatarViewer({ facialControls, facialTargetOverrides }: AvatarViewerProps) {
   return (
     <SceneErrorBoundary>
       <SceneFrame>
-        <AvatarScene facialControls={facialControls} />
+        <AvatarScene
+          facialControls={facialControls}
+          facialTargetOverrides={facialTargetOverrides}
+        />
       </SceneFrame>
     </SceneErrorBoundary>
   );

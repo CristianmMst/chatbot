@@ -10,11 +10,13 @@ import {
   facialTargetMap,
   trackedFacialTargets,
   type FacialControls,
+  type FacialTargetOverrides,
 } from "@/lib/avatar-face";
 import { siteConfig } from "@/lib/site";
 
 type AvatarSceneProps = {
   facialControls?: FacialControls;
+  facialTargetOverrides?: FacialTargetOverrides;
 };
 
 type AvatarModelProps = AvatarSceneProps & {
@@ -82,8 +84,26 @@ function getTargetInfluences(facialControls: FacialControls) {
   return influences;
 }
 
+function mergeTargetInfluences(
+  facialControls: FacialControls,
+  facialTargetOverrides: FacialTargetOverrides | undefined,
+) {
+  const influences = getTargetInfluences(facialControls);
+
+  if (!facialTargetOverrides) {
+    return influences;
+  }
+
+  for (const [target, value] of Object.entries(facialTargetOverrides)) {
+    influences[target] = clampControlValue(value);
+  }
+
+  return influences;
+}
+
 function AvatarModel({
   facialControls = defaultFacialControls,
+  facialTargetOverrides,
   onFocusTargetChange,
 }: AvatarModelProps) {
   const group = useRef<Group>(null);
@@ -97,8 +117,8 @@ function AvatarModel({
     onFocusTargetChange?.(target);
   });
   const targetInfluences = useMemo(
-    () => getTargetInfluences(facialControls),
-    [facialControls],
+    () => mergeTargetInfluences(facialControls, facialTargetOverrides),
+    [facialControls, facialTargetOverrides],
   );
 
   useEffect(() => {
@@ -184,7 +204,7 @@ function SceneLights() {
   );
 }
 
-export default function AvatarScene({ facialControls }: AvatarSceneProps) {
+export default function AvatarScene({ facialControls, facialTargetOverrides }: AvatarSceneProps) {
   const [focusTarget, setFocusTarget] = useState<[number, number, number]>([
     0,
     1.64,
@@ -196,7 +216,11 @@ export default function AvatarScene({ facialControls }: AvatarSceneProps) {
       <Canvas camera={{ fov: 26, position: [0, 1.64, 3.15] }} dpr={[1, 1.5]}>
         <SceneLights />
         <Suspense fallback={null}>
-          <AvatarModel facialControls={facialControls} onFocusTargetChange={setFocusTarget} />
+          <AvatarModel
+            facialControls={facialControls}
+            facialTargetOverrides={facialTargetOverrides}
+            onFocusTargetChange={setFocusTarget}
+          />
         </Suspense>
         <OrbitControls
           enableDamping
