@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { MouthCue } from "@/lib/lip-sync";
 
 type VoiceStatus = "idle" | "listening" | "processing" | "speaking" | "error" | "unsupported";
 
@@ -15,8 +16,10 @@ type VoiceConversationState = {
   isSupported: boolean;
   errorMessage: string | null;
   reply: string;
+  mouthCues: MouthCue[];
   speechBoundarySupported: boolean;
   speechCharIndex: number;
+  speechCurrentTime: number;
   speechProgress: number;
   speechStartedAt: number | null;
   speechText: string;
@@ -29,6 +32,12 @@ type VoiceConversationState = {
 type ChatReplyPayload = {
   mood: "friendly" | "neutral" | "serious";
   reply: string;
+};
+
+type TtsPayload = {
+  audioBase64: string;
+  contentType: string;
+  mouthCues: MouthCue[];
 };
 
 type BrowserSpeechRecognition = {
@@ -149,7 +158,35 @@ async function requestSpeechAudio(text: string) {
     );
   }
 
-  return response.blob();
+  const payload = (await response.json().catch(() => null)) as
+    | TtsPayload
+    | { error?: string }
+    | null;
+
+  if (
+    !payload ||
+    !("audioBase64" in payload) ||
+    typeof payload.audioBase64 !== "string" ||
+    !("contentType" in payload) ||
+    typeof payload.contentType !== "string" ||
+    !("mouthCues" in payload) ||
+    !Array.isArray(payload.mouthCues)
+  ) {
+    throw new Error("La respuesta de TTS no fue valida.");
+  }
+
+  return payload;
+}
+
+function decodeBase64ToBlob(base64: string, contentType: string) {
+  const binaryString = window.atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+
+  for (let index = 0; index < binaryString.length; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index);
+  }
+
+  return new Blob([bytes], { type: contentType });
 }
 
 export function useVoiceConversation(): VoiceConversationState {
@@ -173,8 +210,10 @@ export function useVoiceConversation(): VoiceConversationState {
   const [reply, setReply] = useState("");
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [mouthCues, setMouthCues] = useState<MouthCue[]>([]);
   const [speechText, setSpeechText] = useState("");
   const [speechCharIndex, setSpeechCharIndex] = useState(0);
+  const [speechCurrentTime, setSpeechCurrentTime] = useState(0);
   const [speechProgress, setSpeechProgress] = useState(0);
   const [speechStartedAt, setSpeechStartedAt] = useState<number | null>(null);
   const [speechBoundarySupported, setSpeechBoundarySupported] = useState(false);
@@ -196,7 +235,9 @@ export function useVoiceConversation(): VoiceConversationState {
   }, []);
 
   function resetSpeechState() {
+    setMouthCues([]);
     setSpeechCharIndex(0);
+    setSpeechCurrentTime(0);
     setSpeechProgress(0);
     setSpeechStartedAt(null);
     setSpeechBoundarySupported(false);
@@ -294,7 +335,11 @@ export function useVoiceConversation(): VoiceConversationState {
             return nextHistory.slice(-6);
           });
 
-          const speechAudioBlob = await requestSpeechAudio(nextReply);
+          const speechPayload = await requestSpeechAudio(nextReply);
+          const speechAudioBlob = decodeBase64ToBlob(
+            speechPayload.audioBase64,
+            speechPayload.contentType,
+          );
           const audioUrl = URL.createObjectURL(speechAudioBlob);
           const audio = new Audio(audioUrl);
 
@@ -303,6 +348,7 @@ export function useVoiceConversation(): VoiceConversationState {
           audioRef.current = audio;
           setSpeechText(nextReply);
           resetSpeechState();
+          setMouthCues(speechPayload.mouthCues);
 
           audio.preload = "auto";
           audio.onplay = () => {
@@ -313,6 +359,7 @@ export function useVoiceConversation(): VoiceConversationState {
             const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
             const progress = duration > 0 ? Math.min(audio.currentTime / duration, 1) : 0;
 
+            setSpeechCurrentTime(audio.currentTime);
             setSpeechProgress(progress);
             setSpeechCharIndex(Math.min(nextReply.length, Math.floor(nextReply.length * progress)));
           };
@@ -395,7 +442,9 @@ export function useVoiceConversation(): VoiceConversationState {
     hasResolvedSupport,
     history,
     isSupported,
+    mouthCues,
     reply,
+    speechCurrentTime,
     speechBoundarySupported,
     speechCharIndex,
     speechProgress,

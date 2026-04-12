@@ -80,9 +80,11 @@ export default function AvatarExperience() {
     errorMessage,
     hasResolvedSupport,
     isSupported,
+    mouthCues,
     reply,
     speechBoundarySupported,
     speechCharIndex,
+    speechCurrentTime,
     speechProgress,
     speechStartedAt,
     speechText,
@@ -93,8 +95,10 @@ export default function AvatarExperience() {
   } = useVoiceConversation();
   const speechTargetOverrides = useSpeechFacialAnimation({
     isSpeaking: status === "speaking",
+    mouthCues,
     speechBoundarySupported,
     speechCharIndex,
+    speechCurrentTime,
     speechProgress,
     speechStartedAt,
     speechText,

@@ -1,3 +1,4 @@
+import { synthesizeSpeech } from "@/lib/tts-pipeline";
 import { getMissingTtsConfigMessage, getTtsConfig } from "@/lib/tts-config";
 
 type TtsRequestBody = {
@@ -18,45 +19,27 @@ export async function POST(request: Request) {
     return Response.json({ error: getMissingTtsConfigMessage() }, { status: 500 });
   }
 
-  const endpoint = new URL(`https://api.elevenlabs.io/v1/text-to-speech/${config.voiceId}`);
-  endpoint.searchParams.set("output_format", config.outputFormat);
-
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Accept: "audio/mpeg",
-      "Content-Type": "application/json",
-      "xi-api-key": config.apiKey,
-    },
-    body: JSON.stringify({
-      language_code: "es",
-      model_id: config.modelId,
-      text,
-      voice_settings: {
-        similarity_boost: 0.75,
-        stability: 0.45,
-        style: 0.18,
-        use_speaker_boost: true,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
+  try {
+    const speech = await synthesizeSpeech(text);
 
     return Response.json(
       {
-        error: errorText || "La sintesis de voz con ElevenLabs fallo.",
+        audioBase64: speech.audioBase64,
+        contentType: speech.contentType,
+        mouthCues: speech.mouthCues,
       },
-      { status: response.status },
+      {
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
+    );
+  } catch (error) {
+    return Response.json(
+      {
+        error: error instanceof Error ? error.message : "La sintesis de voz con ElevenLabs fallo.",
+      },
+      { status: 500 },
     );
   }
-
-  return new Response(response.body, {
-    status: 200,
-    headers: {
-      "Cache-Control": "no-store",
-      "Content-Type": response.headers.get("content-type") ?? "audio/mpeg",
-    },
-  });
 }
