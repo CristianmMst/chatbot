@@ -77,6 +77,9 @@ export default function AvatarExperience() {
   const [isFacialControlMinimized, setIsFacialControlMinimized] = useState(true);
   const [manualFacialControls, setManualFacialControls] = useState(defaultFacialControls);
   const {
+    analyserRef,
+    audioRef,
+    canReplayLastReply,
     errorMessage,
     hasResolvedSupport,
     isSupported,
@@ -84,10 +87,10 @@ export default function AvatarExperience() {
     reply,
     speechBoundarySupported,
     speechCharIndex,
-    speechCurrentTime,
     speechProgress,
     speechStartedAt,
     speechText,
+    replayLastReply,
     startListening,
     status,
     stopAll,
@@ -95,10 +98,8 @@ export default function AvatarExperience() {
   } = useVoiceConversation();
   const speechTargetOverrides = useSpeechFacialAnimation({
     isSpeaking: status === "speaking",
-    mouthCues,
     speechBoundarySupported,
     speechCharIndex,
-    speechCurrentTime,
     speechProgress,
     speechStartedAt,
     speechText,
@@ -127,7 +128,13 @@ export default function AvatarExperience() {
   return (
     <>
       <div className="absolute inset-0 z-0">
-        <AvatarViewer facialControls={facialControls} facialTargetOverrides={speechTargetOverrides} />
+        <AvatarViewer
+          analyserRef={analyserRef}
+          audioRef={audioRef}
+          facialControls={facialControls}
+          facialTargetOverrides={speechTargetOverrides}
+          mouthCues={mouthCues}
+        />
       </div>
 
       <div className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-between p-6 sm:p-10">
@@ -205,8 +212,20 @@ export default function AvatarExperience() {
                 </svg>
               </button>
 
-              <div className="text-[10px] text-zinc-400 leading-relaxed">
-                {helperMessage}
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                <div className="text-[10px] leading-relaxed text-zinc-400">
+                  {helperMessage}
+                </div>
+                <button
+                  className="self-start rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!canReplayLastReply || status === "processing" || status === "listening"}
+                  onClick={() => {
+                    void replayLastReply();
+                  }}
+                  type="button"
+                >
+                  Reproducir de nuevo
+                </button>
               </div>
             </div>
           </div>

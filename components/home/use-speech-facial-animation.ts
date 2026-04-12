@@ -2,14 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { FacialTargetOverrides } from "@/lib/avatar-face";
-import type { MouthCue, MouthCueValue } from "@/lib/lip-sync";
 
 type SpeechFacialAnimationInput = {
   isSpeaking: boolean;
-  mouthCues: MouthCue[];
   speechBoundarySupported: boolean;
   speechCharIndex: number;
-  speechCurrentTime: number;
   speechProgress: number;
   speechStartedAt: number | null;
   speechText: string;
@@ -122,67 +119,6 @@ function getSpeechPose(character: string, phase: number): FacialTargetOverrides 
   };
 }
 
-function getCuePose(cue: MouthCueValue): FacialTargetOverrides {
-  switch (cue) {
-    case "A":
-      return {
-        jawOpen: 0.03,
-        mouthClose: 0.82,
-      };
-    case "B":
-      return {
-        jawOpen: 0.11,
-        mouthStretchLeft: 0.18,
-        mouthStretchRight: 0.18,
-      };
-    case "C":
-      return {
-        jawOpen: 0.22,
-        mouthLowerDownLeft: 0.05,
-        mouthLowerDownRight: 0.05,
-      };
-    case "D":
-      return {
-        jawOpen: 0.4,
-        mouthLowerDownLeft: 0.1,
-        mouthLowerDownRight: 0.1,
-      };
-    case "E":
-      return {
-        jawOpen: 0.15,
-        mouthFunnel: 0.34,
-      };
-    case "F":
-      return {
-        jawOpen: 0.1,
-        mouthFunnel: 0.44,
-        mouthPucker: 0.42,
-      };
-    case "G":
-      return {
-        jawOpen: 0.05,
-        mouthClose: 0.12,
-        mouthUpperUpLeft: 0.1,
-        mouthUpperUpRight: 0.1,
-      };
-    case "H":
-      return {
-        jawOpen: 0.18,
-        mouthStretchLeft: 0.1,
-        mouthStretchRight: 0.1,
-      };
-    default:
-      return {
-        jawOpen: 0.02,
-        mouthClose: 0.12,
-      };
-  }
-}
-
-function getActiveMouthCue(mouthCues: MouthCue[], speechCurrentTime: number) {
-  return mouthCues.find((cue) => speechCurrentTime >= cue.start && speechCurrentTime < cue.end) ?? null;
-}
-
 function sanitizeTargets(targets: FacialTargetOverrides) {
   return Object.fromEntries(
     Object.entries(targets)
@@ -193,10 +129,8 @@ function sanitizeTargets(targets: FacialTargetOverrides) {
 
 export function useSpeechFacialAnimation({
   isSpeaking,
-  mouthCues,
   speechBoundarySupported,
   speechCharIndex,
-  speechCurrentTime,
   speechProgress,
   speechStartedAt,
   speechText,
@@ -228,12 +162,6 @@ export function useSpeechFacialAnimation({
     }
 
     const phase = speechStartedAt === null ? 0 : Math.max(0, now - speechStartedAt) / 140;
-    const activeMouthCue = getActiveMouthCue(mouthCues, speechCurrentTime);
-
-    if (activeMouthCue) {
-      return sanitizeTargets(getCuePose(activeMouthCue.value));
-    }
-
     const currentCharacter = getCurrentCharacter(
       speechText,
       speechCharIndex,
@@ -246,11 +174,9 @@ export function useSpeechFacialAnimation({
     return sanitizeTargets(getSpeechPose(currentCharacter, phase));
   }, [
     isSpeaking,
-    mouthCues,
     now,
     speechBoundarySupported,
     speechCharIndex,
-    speechCurrentTime,
     speechProgress,
     speechStartedAt,
     speechText,

@@ -11,6 +11,9 @@ type ConversationMessage = {
 };
 
 type VoiceConversationState = {
+  analyserRef: React.RefObject<AnalyserNode | null>;
+  audioRef: React.RefObject<HTMLAudioElement | null>;
+  canReplayLastReply: boolean;
   hasResolvedSupport: boolean;
   history: ConversationMessage[];
   isSupported: boolean;
@@ -23,6 +26,7 @@ type VoiceConversationState = {
   speechProgress: number;
   speechStartedAt: number | null;
   speechText: string;
+  replayLastReply: () => Promise<void>;
   startListening: () => void;
   status: VoiceStatus;
   stopAll: () => void;
@@ -38,6 +42,10 @@ type TtsPayload = {
   audioBase64: string;
   contentType: string;
   mouthCues: MouthCue[];
+};
+
+type CachedSpeech = TtsPayload & {
+  text: string;
 };
 
 type BrowserSpeechRecognition = {
@@ -210,6 +218,7 @@ export function useVoiceConversation(): VoiceConversationState {
   const [reply, setReply] = useState("");
   const [history, setHistory] = useState<ConversationMessage[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [canReplayLastReply, setCanReplayLastReply] = useState(false);
   const [mouthCues, setMouthCues] = useState<MouthCue[]>([]);
   const [speechText, setSpeechText] = useState("");
   const [speechCharIndex, setSpeechCharIndex] = useState(0);
@@ -220,10 +229,14 @@ export function useVoiceConversation(): VoiceConversationState {
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const activeAudioUrlRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
   const finalTranscriptRef = useRef("");
   const shouldHandleResultRef = useRef(false);
   const statusRef = useRef<VoiceStatus>("idle");
   const historyRef = useRef<ConversationMessage[]>([]);
+  const lastSpeechRef = useRef<CachedSpeech | null>(null);
 
   const clearActiveAudioUrl = useCallback(() => {
     if (!activeAudioUrlRef.current) {
@@ -243,6 +256,25 @@ export function useVoiceConversation(): VoiceConversationState {
     setSpeechBoundarySupported(false);
   }
 
+  const disconnectAnalyser = useCallback(() => {
+    if (sourceNodeRef.current) {
+      try { sourceNodeRef.current.disconnect(); } catch { /* ignore */ }
+      sourceNodeRef.current = null;
+    }
+
+    if (analyserRef.current) {
+      try { analyserRef.current.disconnect(); } catch { /* ignore */ }
+    }
+
+    analyserRef.current = null;
+
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      try { audioContextRef.current.close(); } catch { /* ignore */ }
+    }
+
+    audioContextRef.current = null;
+  }, []);
+
   const stopCurrentAudio = useCallback(() => {
     if (!audioRef.current) {
       clearActiveAudioUrl();
@@ -252,8 +284,83 @@ export function useVoiceConversation(): VoiceConversationState {
     audioRef.current.pause();
     audioRef.current.src = "";
     audioRef.current = null;
+    disconnectAnalyser();
     clearActiveAudioUrl();
-  }, [clearActiveAudioUrl]);
+  }, [clearActiveAudioUrl, disconnectAnalyser]);
+
+  const playCachedSpeech = useCallback(
+    async (speech: CachedSpeech) => {
+      const speechAudioBlob = decodeBase64ToBlob(speech.audioBase64, speech.contentType);
+      const audioUrl = URL.createObjectURL(speechAudioBlob);
+      const audio = new Audio(audioUrl);
+
+      stopCurrentAudio();
+      activeAudioUrlRef.current = audioUrl;
+      audioRef.current = audio;
+      setErrorMessage(null);
+      setSpeechText(speech.text);
+      resetSpeechState();
+      setMouthCues(speech.mouthCues);
+
+      audio.preload = "auto";
+      audio.onplay = () => {
+        setSpeechStartedAt(Date.now());
+        setStatus("speaking");
+      };
+      audio.ontimeupdate = () => {
+        const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
+        const progress = duration > 0 ? Math.min(audio.currentTime / duration, 1) : 0;
+
+        setSpeechCurrentTime(audio.currentTime);
+        setSpeechProgress(progress);
+        setSpeechCharIndex(Math.min(speech.text.length, Math.floor(speech.text.length * progress)));
+      };
+      audio.onended = () => {
+        resetSpeechState();
+        setStatus("idle");
+        stopCurrentAudio();
+      };
+      audio.onerror = () => {
+        resetSpeechState();
+        setErrorMessage("La reproduccion del audio de ElevenLabs fallo.");
+        setStatus("error");
+        stopCurrentAudio();
+      };
+
+      try {
+        const audioContext = new AudioContext();
+        const source = audioContext.createMediaElementSource(audio);
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.4;
+        source.connect(analyser);
+        analyser.connect(audioContext.destination);
+
+        audioContextRef.current = audioContext;
+        sourceNodeRef.current = source;
+        analyserRef.current = analyser;
+      } catch {
+        disconnectAnalyser();
+      }
+
+      await audio.play();
+    },
+    [stopCurrentAudio, disconnectAnalyser],
+  );
+
+  const replayLastReply = useCallback(async () => {
+    if (!lastSpeechRef.current || statusRef.current === "processing") {
+      return;
+    }
+
+    try {
+      await playCachedSpeech(lastSpeechRef.current);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "No pude reproducir la ultima respuesta.");
+      resetSpeechState();
+      setStatus("error");
+    }
+  }, [playCachedSpeech]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -336,46 +443,14 @@ export function useVoiceConversation(): VoiceConversationState {
           });
 
           const speechPayload = await requestSpeechAudio(nextReply);
-          const speechAudioBlob = decodeBase64ToBlob(
-            speechPayload.audioBase64,
-            speechPayload.contentType,
-          );
-          const audioUrl = URL.createObjectURL(speechAudioBlob);
-          const audio = new Audio(audioUrl);
-
-          stopCurrentAudio();
-          activeAudioUrlRef.current = audioUrl;
-          audioRef.current = audio;
-          setSpeechText(nextReply);
-          resetSpeechState();
-          setMouthCues(speechPayload.mouthCues);
-
-          audio.preload = "auto";
-          audio.onplay = () => {
-            setSpeechStartedAt(Date.now());
-            setStatus("speaking");
-          };
-          audio.ontimeupdate = () => {
-            const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
-            const progress = duration > 0 ? Math.min(audio.currentTime / duration, 1) : 0;
-
-            setSpeechCurrentTime(audio.currentTime);
-            setSpeechProgress(progress);
-            setSpeechCharIndex(Math.min(nextReply.length, Math.floor(nextReply.length * progress)));
-          };
-          audio.onended = () => {
-            resetSpeechState();
-            setStatus("idle");
-            stopCurrentAudio();
-          };
-          audio.onerror = () => {
-            resetSpeechState();
-            setErrorMessage("La reproduccion del audio de ElevenLabs fallo.");
-            setStatus("error");
-            stopCurrentAudio();
+          const cachedSpeech = {
+            ...speechPayload,
+            text: nextReply,
           };
 
-          await audio.play();
+          lastSpeechRef.current = cachedSpeech;
+          setCanReplayLastReply(true);
+          await playCachedSpeech(cachedSpeech);
         } catch (error) {
           setErrorMessage(error instanceof Error ? error.message : "La respuesta del asistente fallo.");
           resetSpeechState();
@@ -394,7 +469,7 @@ export function useVoiceConversation(): VoiceConversationState {
       stopCurrentAudio();
       recognitionRef.current = null;
     };
-  }, [recognitionCtor, stopCurrentAudio]);
+  }, [playCachedSpeech, recognitionCtor, stopCurrentAudio]);
 
   useEffect(() => {
     return () => {
@@ -438,6 +513,9 @@ export function useVoiceConversation(): VoiceConversationState {
   const resolvedStatus = !hasResolvedSupport ? "idle" : isSupported ? status : "unsupported";
 
   return {
+    analyserRef,
+    audioRef,
+    canReplayLastReply,
     errorMessage,
     hasResolvedSupport,
     history,
@@ -450,6 +528,7 @@ export function useVoiceConversation(): VoiceConversationState {
     speechProgress,
     speechStartedAt,
     speechText,
+    replayLastReply,
     startListening,
     status: resolvedStatus,
     stopAll,

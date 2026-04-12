@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { Component, type ReactNode } from "react";
 import type { FacialControls, FacialTargetOverrides } from "@/lib/avatar-face";
+import type { MouthCue } from "@/lib/lip-sync";
 
 type ErrorBoundaryProps = {
   children: ReactNode;
@@ -13,8 +14,11 @@ type ErrorBoundaryState = {
 };
 
 type AvatarViewerProps = {
+  analyserRef?: React.RefObject<AnalyserNode | null>;
+  audioRef?: React.RefObject<HTMLAudioElement | null>;
   facialControls?: FacialControls;
   facialTargetOverrides?: FacialTargetOverrides;
+  mouthCues?: MouthCue[];
 };
 
 const AvatarScene = dynamic(() => import("@/components/scene/avatar-scene"), {
@@ -78,13 +82,22 @@ function SceneErrorState() {
   );
 }
 
-export default function AvatarViewer({ facialControls, facialTargetOverrides }: AvatarViewerProps) {
+export default function AvatarViewer({
+  analyserRef,
+  audioRef,
+  facialControls,
+  facialTargetOverrides,
+  mouthCues,
+}: AvatarViewerProps) {
   return (
     <SceneErrorBoundary>
       <SceneFrame>
         <AvatarScene
+          analyserRef={analyserRef}
+          audioRef={audioRef}
           facialControls={facialControls}
           facialTargetOverrides={facialTargetOverrides}
+          mouthCues={mouthCues}
         />
       </SceneFrame>
     </SceneErrorBoundary>

@@ -8,15 +8,20 @@ import type { AnimationClip, Group, Mesh, Object3D } from "three";
 import {
   defaultFacialControls,
   facialTargetMap,
+  speechTargetKeys,
   trackedFacialTargets,
   type FacialControls,
   type FacialTargetOverrides,
 } from "@/lib/avatar-face";
 import { siteConfig } from "@/lib/site";
+import type { MouthCue, MouthCueValue } from "@/lib/lip-sync";
 
 type AvatarSceneProps = {
+  analyserRef?: React.RefObject<AnalyserNode | null>;
+  audioRef?: React.RefObject<HTMLAudioElement | null>;
   facialControls?: FacialControls;
   facialTargetOverrides?: FacialTargetOverrides;
+  mouthCues?: MouthCue[];
 };
 
 type AvatarModelProps = AvatarSceneProps & {
@@ -28,7 +33,57 @@ type MorphMesh = Mesh & {
   morphTargetInfluences: number[];
 };
 
-const FACIAL_SMOOTHING = 12;
+const EMOTIONAL_DAMPING = 12;
+const SPEECH_DAMPING = 35;
+const AMPLITUDE_SMOOTHING = 0.6;
+const JAW_OPEN_SCALE = 0.55;
+const JAW_OPEN_MIN = 0.03;
+
+function getDampingLambda(targetName: string) {
+  return speechTargetKeys.includes(targetName as (typeof speechTargetKeys)[number])
+    ? SPEECH_DAMPING
+    : EMOTIONAL_DAMPING;
+}
+
+function getActiveMouthCue(mouthCues: MouthCue[], speechCurrentTime: number) {
+  return mouthCues.find((cue) => speechCurrentTime >= cue.start && speechCurrentTime < cue.end) ?? null;
+}
+
+function getCuePose(cue: MouthCueValue): FacialTargetOverrides {
+  switch (cue) {
+    case "A":
+      return { jawOpen: 0.03, mouthClose: 0.82 };
+    case "B":
+      return { jawOpen: 0.11, mouthStretchLeft: 0.18, mouthStretchRight: 0.18 };
+    case "C":
+      return { jawOpen: 0.22, mouthLowerDownLeft: 0.05, mouthLowerDownRight: 0.05 };
+    case "D":
+      return { jawOpen: 0.4, mouthLowerDownLeft: 0.1, mouthLowerDownRight: 0.1 };
+    case "E":
+      return { jawOpen: 0.15, mouthFunnel: 0.34 };
+    case "F":
+      return { jawOpen: 0.1, mouthFunnel: 0.44, mouthPucker: 0.42 };
+    case "G":
+      return { jawOpen: 0.05, mouthClose: 0.12, mouthUpperUpLeft: 0.1, mouthUpperUpRight: 0.1 };
+    case "H":
+      return { jawOpen: 0.18, mouthStretchLeft: 0.1, mouthStretchRight: 0.1 };
+    default:
+      return { jawOpen: 0.02, mouthClose: 0.12 };
+  }
+}
+
+function computeAmplitude(analyser: AnalyserNode): number {
+  const bufferLength = analyser.frequencyBinCount;
+  const dataArray = new Uint8Array(bufferLength);
+  analyser.getByteFrequencyData(dataArray);
+
+  let sum = 0;
+  for (let index = 0; index < bufferLength; index += 1) {
+    sum += dataArray[index];
+  }
+
+  return sum / (bufferLength * 255);
+}
 
 function getTrackTargetName(trackName: string) {
   return trackName.split(".")[0]?.trim() ?? "";
@@ -102,12 +157,16 @@ function mergeTargetInfluences(
 }
 
 function AvatarModel({
+  analyserRef,
+  audioRef,
   facialControls = defaultFacialControls,
   facialTargetOverrides,
+  mouthCues,
   onFocusTargetChange,
 }: AvatarModelProps) {
   const group = useRef<Group>(null);
   const morphMeshesRef = useRef<MorphMesh[]>([]);
+  const smoothedAmplitudeRef = useRef(0);
   const { scene, animations } = useGLTF(siteConfig.modelPath);
   const { actions } = useAnimations(animations, group);
   const compatibleClipName = useMemo(() => {
@@ -116,10 +175,6 @@ function AvatarModel({
   const notifyFocusTargetChange = useEffectEvent((target: [number, number, number]) => {
     onFocusTargetChange?.(target);
   });
-  const targetInfluences = useMemo(
-    () => mergeTargetInfluences(facialControls, facialTargetOverrides),
-    [facialControls, facialTargetOverrides],
-  );
 
   useEffect(() => {
     morphMeshesRef.current = collectMorphMeshes(scene);
@@ -136,7 +191,7 @@ function AvatarModel({
     const alignedHeadZ = headPosition.z;
 
     notifyFocusTargetChange([0, alignedHeadY, alignedHeadZ]);
-  }, [scene]);
+  }, [scene, notifyFocusTargetChange]);
 
   useEffect(() => {
     if (!compatibleClipName) {
@@ -157,6 +212,29 @@ function AvatarModel({
   }, [actions, compatibleClipName]);
 
   useFrame((_, delta) => {
+    let speechOverrides: FacialTargetOverrides = {};
+
+    if (audioRef?.current && mouthCues && mouthCues.length > 0) {
+      const currentTime = audioRef.current.currentTime;
+      const activeCue = getActiveMouthCue(mouthCues, currentTime);
+      if (activeCue) {
+        speechOverrides = getCuePose(activeCue.value);
+      }
+    } else if (analyserRef?.current && audioRef?.current && !audioRef.current.paused) {
+      const rawAmplitude = computeAmplitude(analyserRef.current);
+      smoothedAmplitudeRef.current = smoothedAmplitudeRef.current * AMPLITUDE_SMOOTHING + rawAmplitude * (1 - AMPLITUDE_SMOOTHING);
+      speechOverrides = {
+        jawOpen: Math.min(1, smoothedAmplitudeRef.current * JAW_OPEN_SCALE + JAW_OPEN_MIN),
+      };
+    } else {
+      smoothedAmplitudeRef.current = 0;
+    }
+
+    const merged = mergeTargetInfluences(facialControls, {
+      ...facialTargetOverrides,
+      ...speechOverrides,
+    });
+
     for (const mesh of morphMeshesRef.current) {
       for (const targetName of trackedFacialTargets) {
         const targetIndex = mesh.morphTargetDictionary[targetName];
@@ -165,12 +243,11 @@ function AvatarModel({
           continue;
         }
 
-        // Three.js stores morph weights imperatively on the mesh instance.
         // eslint-disable-next-line react-hooks/immutability
         mesh.morphTargetInfluences[targetIndex] = MathUtils.damp(
           mesh.morphTargetInfluences[targetIndex] ?? 0,
-          targetInfluences[targetName] ?? 0,
-          FACIAL_SMOOTHING,
+          merged[targetName] ?? 0,
+          getDampingLambda(targetName),
           delta,
         );
       }
@@ -204,7 +281,13 @@ function SceneLights() {
   );
 }
 
-export default function AvatarScene({ facialControls, facialTargetOverrides }: AvatarSceneProps) {
+export default function AvatarScene({
+  analyserRef,
+  audioRef,
+  facialControls,
+  facialTargetOverrides,
+  mouthCues,
+}: AvatarSceneProps) {
   const [focusTarget, setFocusTarget] = useState<[number, number, number]>([
     0,
     1.64,
@@ -217,8 +300,11 @@ export default function AvatarScene({ facialControls, facialTargetOverrides }: A
         <SceneLights />
         <Suspense fallback={null}>
           <AvatarModel
+            analyserRef={analyserRef}
+            audioRef={audioRef}
             facialControls={facialControls}
             facialTargetOverrides={facialTargetOverrides}
+            mouthCues={mouthCues}
             onFocusTargetChange={setFocusTarget}
           />
         </Suspense>
