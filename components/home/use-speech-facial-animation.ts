@@ -14,6 +14,13 @@ type SpeechFacialAnimationInput = {
 
 const AVERAGE_CHARACTERS_PER_SECOND = 14;
 
+export type SpeechVisemeProfile = "closed" | "open" | "round" | "wide" | "soft" | "rest";
+
+export type SpeechPose = {
+  profile: SpeechVisemeProfile;
+  targets: FacialTargetOverrides;
+};
+
 function clamp(value: number, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
 }
@@ -58,65 +65,70 @@ function getCurrentCharacter(
   return speechText[index]?.toLowerCase() ?? "";
 }
 
-function getSpeechPose(character: string, phase: number): FacialTargetOverrides {
+function createSpeechPose(profile: SpeechVisemeProfile, targets: FacialTargetOverrides): SpeechPose {
+  return {
+    profile,
+    targets,
+  };
+}
+
+function getSpeechPose(character: string, phase: number): SpeechPose {
   const pulse = 0.86 + Math.sin(phase * 1.7) * 0.14;
   const swing = (Math.sin(phase * 0.9) + 1) / 2;
   const pauseWeight = getPauseWeight(character);
 
   if (!character || /\s|[.,;:!?]/.test(character)) {
-    return {
-      jawOpen: 0.06 * pauseWeight,
-      mouthClose: 0.18,
-    };
+    return createSpeechPose("rest", {
+      jawOpen: 0.04 * pauseWeight,
+    });
   }
 
   if (/[mbp]/.test(character)) {
-    return {
-      jawOpen: 0.05,
-      mouthClose: 0.9,
-    };
+    return createSpeechPose("closed", {
+      jawOpen: 0.03,
+      mouthPucker: 0.06,
+    });
   }
 
   if (/[ou]/.test(character)) {
-    return {
-      jawOpen: 0.18 * pulse,
-      mouthFunnel: 0.58 * pulse,
-      mouthPucker: 0.42 * (0.9 + swing * 0.2),
-    };
+    return createSpeechPose("round", {
+      jawOpen: 0.13 * pulse,
+      mouthFunnel: 0.24 * pulse,
+      mouthPucker: 0.14 * (0.92 + swing * 0.12),
+    });
   }
 
   if (/[ei]/.test(character)) {
-    return {
-      jawOpen: 0.16 * pulse,
-      mouthStretchLeft: 0.56 * (0.92 + swing * 0.16),
-      mouthStretchRight: 0.56 * (0.92 + (1 - swing) * 0.16),
-      mouthUpperUpLeft: 0.12,
-      mouthUpperUpRight: 0.12,
-    };
+    return createSpeechPose("wide", {
+      jawOpen: 0.11 * pulse,
+      mouthStretchLeft: 0.23 * (0.94 + swing * 0.1),
+      mouthStretchRight: 0.23 * (0.94 + (1 - swing) * 0.1),
+      mouthUpperUpLeft: 0.05,
+      mouthUpperUpRight: 0.05,
+    });
   }
 
   if (/[fv]/.test(character)) {
-    return {
-      jawOpen: 0.12 * pulse,
-      mouthClose: 0.32,
-      mouthUpperUpLeft: 0.22,
-      mouthUpperUpRight: 0.22,
-    };
+    return createSpeechPose("soft", {
+      jawOpen: 0.08 * pulse,
+      mouthUpperUpLeft: 0.08,
+      mouthUpperUpRight: 0.08,
+    });
   }
 
   if (/[aá]/.test(character)) {
-    return {
-      jawOpen: 0.44 * pulse,
-      mouthLowerDownLeft: 0.26,
-      mouthLowerDownRight: 0.26,
-    };
+    return createSpeechPose("open", {
+      jawOpen: 0.24 * pulse,
+      mouthLowerDownLeft: 0.11,
+      mouthLowerDownRight: 0.11,
+    });
   }
 
-  return {
-    jawOpen: 0.24 * pulse,
-    mouthStretchLeft: 0.18 * swing,
-    mouthStretchRight: 0.18 * (1 - swing),
-  };
+  return createSpeechPose("soft", {
+    jawOpen: 0.14 * pulse,
+    mouthStretchLeft: 0.1 * swing,
+    mouthStretchRight: 0.1 * (1 - swing),
+  });
 }
 
 function sanitizeTargets(targets: FacialTargetOverrides) {
@@ -125,6 +137,33 @@ function sanitizeTargets(targets: FacialTargetOverrides) {
       .filter(([, value]) => typeof value === "number")
       .map(([key, value]) => [key, clamp(value as number)]),
   ) as FacialTargetOverrides;
+}
+
+function normalizeSpeechTargets(profile: SpeechVisemeProfile, targets: FacialTargetOverrides) {
+  const nextTargets = { ...targets };
+
+  if (profile === "round") {
+    nextTargets.mouthStretchLeft = 0;
+    nextTargets.mouthStretchRight = 0;
+  }
+
+  if (profile === "wide") {
+    nextTargets.mouthFunnel = 0;
+    nextTargets.mouthPucker = 0;
+  }
+
+  if (profile === "open") {
+    nextTargets.mouthPucker = 0;
+    nextTargets.mouthUpperUpLeft = Math.min(nextTargets.mouthUpperUpLeft ?? 0, 0.04);
+    nextTargets.mouthUpperUpRight = Math.min(nextTargets.mouthUpperUpRight ?? 0, 0.04);
+  }
+
+  if (profile === "closed") {
+    nextTargets.mouthLowerDownLeft = 0;
+    nextTargets.mouthLowerDownRight = 0;
+  }
+
+  return nextTargets;
 }
 
 export function useSpeechFacialAnimation({
@@ -171,7 +210,8 @@ export function useSpeechFacialAnimation({
       now,
     );
 
-    return sanitizeTargets(getSpeechPose(currentCharacter, phase));
+    const pose = getSpeechPose(currentCharacter, phase);
+    return sanitizeTargets(normalizeSpeechTargets(pose.profile, pose.targets));
   }, [
     isSpeaking,
     now,

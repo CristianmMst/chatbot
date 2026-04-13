@@ -267,10 +267,10 @@ export default function AvatarExperience() {
             </div>
           </div>
 
-          <div className={`transition-all duration-300 overflow-hidden ${isFacialControlMinimized ? 'h-0 opacity-0 mt-0' : 'h-auto opacity-100 mt-4'}`}>
-            <div className="mb-4 flex flex-wrap gap-2">
-              {facialPresets.map((preset) => (
-                <button
+            <div className={`transition-all duration-300 overflow-hidden ${isFacialControlMinimized ? 'h-0 opacity-0 mt-0' : 'h-auto opacity-100 mt-4'}`}>
+              <div className="mb-4 flex flex-wrap gap-2">
+                {facialPresets.map((preset) => (
+                  <button
                   key={preset.label}
                   className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:border-cyan-300/40 hover:bg-cyan-300/10 hover:text-white"
                   onClick={() => setManualFacialControls(preset.controls)}

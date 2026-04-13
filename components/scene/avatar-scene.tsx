@@ -1,8 +1,20 @@
 "use client";
 
-import { Suspense, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Center, OrbitControls, useAnimations, useGLTF } from "@react-three/drei";
+import {
+  Center,
+  OrbitControls,
+  useAnimations,
+  useGLTF,
+} from "@react-three/drei";
 import { Box3, MathUtils, Vector3 } from "three";
 import type { AnimationClip, Group, Mesh, Object3D } from "three";
 import {
@@ -15,6 +27,7 @@ import {
 } from "@/lib/avatar-face";
 import { siteConfig } from "@/lib/site";
 import type { MouthCue, MouthCueValue } from "@/lib/lip-sync";
+import type { SpeechVisemeProfile } from "@/components/home/use-speech-facial-animation";
 
 type AvatarSceneProps = {
   analyserRef?: React.RefObject<AnalyserNode | null>;
@@ -36,17 +49,32 @@ type MorphMesh = Mesh & {
 const EMOTIONAL_DAMPING = 12;
 const SPEECH_DAMPING = 35;
 const AMPLITUDE_SMOOTHING = 0.6;
-const JAW_OPEN_SCALE = 0.55;
-const JAW_OPEN_MIN = 0.03;
+const JAW_OPEN_SCALE = 0.4;
+const JAW_OPEN_MIN = 0.02;
+
+const JAW_CAP_BY_PROFILE: Record<SpeechVisemeProfile, number> = {
+  closed: 0.08,
+  open: 0.32,
+  round: 0.22,
+  wide: 0.18,
+  soft: 0.2,
+  rest: 0.08,
+};
 
 function getDampingLambda(targetName: string) {
-  return speechTargetKeys.includes(targetName as (typeof speechTargetKeys)[number])
+  return speechTargetKeys.includes(
+    targetName as (typeof speechTargetKeys)[number],
+  )
     ? SPEECH_DAMPING
     : EMOTIONAL_DAMPING;
 }
 
 function getActiveMouthCue(mouthCues: MouthCue[], speechCurrentTime: number) {
-  return mouthCues.find((cue) => speechCurrentTime >= cue.start && speechCurrentTime < cue.end) ?? null;
+  return (
+    mouthCues.find(
+      (cue) => speechCurrentTime >= cue.start && speechCurrentTime < cue.end,
+    ) ?? null
+  );
 }
 
 function getCuePose(cue: MouthCueValue): FacialTargetOverrides {
@@ -56,15 +84,28 @@ function getCuePose(cue: MouthCueValue): FacialTargetOverrides {
     case "B":
       return { jawOpen: 0.11, mouthStretchLeft: 0.18, mouthStretchRight: 0.18 };
     case "C":
-      return { jawOpen: 0.22, mouthLowerDownLeft: 0.05, mouthLowerDownRight: 0.05 };
+      return {
+        jawOpen: 0.22,
+        mouthLowerDownLeft: 0.05,
+        mouthLowerDownRight: 0.05,
+      };
     case "D":
-      return { jawOpen: 0.4, mouthLowerDownLeft: 0.1, mouthLowerDownRight: 0.1 };
+      return {
+        jawOpen: 0.4,
+        mouthLowerDownLeft: 0.1,
+        mouthLowerDownRight: 0.1,
+      };
     case "E":
       return { jawOpen: 0.15, mouthFunnel: 0.34 };
     case "F":
       return { jawOpen: 0.1, mouthFunnel: 0.44, mouthPucker: 0.42 };
     case "G":
-      return { jawOpen: 0.05, mouthClose: 0.12, mouthUpperUpLeft: 0.1, mouthUpperUpRight: 0.1 };
+      return {
+        jawOpen: 0.05,
+        mouthClose: 0.12,
+        mouthUpperUpLeft: 0.1,
+        mouthUpperUpRight: 0.1,
+      };
     case "H":
       return { jawOpen: 0.18, mouthStretchLeft: 0.1, mouthStretchRight: 0.1 };
     default:
@@ -83,6 +124,109 @@ function computeAmplitude(analyser: AnalyserNode): number {
   }
 
   return sum / (bufferLength * 255);
+}
+
+function getSpeechProfile(
+  targets: FacialTargetOverrides | undefined,
+): SpeechVisemeProfile {
+  if (!targets) {
+    return "rest";
+  }
+
+  if ((targets.mouthPucker ?? 0) > 0.04 && (targets.jawOpen ?? 0) < 0.06) {
+    return "closed";
+  }
+
+  if ((targets.mouthFunnel ?? 0) > 0.12 || (targets.mouthPucker ?? 0) > 0.08) {
+    return "round";
+  }
+
+  if (
+    (targets.mouthStretchLeft ?? 0) > 0.14 ||
+    (targets.mouthStretchRight ?? 0) > 0.14
+  ) {
+    return "wide";
+  }
+
+  if (
+    (targets.mouthLowerDownLeft ?? 0) > 0.06 ||
+    (targets.mouthLowerDownRight ?? 0) > 0.06
+  ) {
+    return "open";
+  }
+
+  if (
+    (targets.jawOpen ?? 0) > 0.07 ||
+    (targets.mouthUpperUpLeft ?? 0) > 0.04 ||
+    (targets.mouthUpperUpRight ?? 0) > 0.04
+  ) {
+    return "soft";
+  }
+
+  return "rest";
+}
+
+function createSafeSpeechOverrides(
+  profile: SpeechVisemeProfile,
+  baseTargets: FacialTargetOverrides | undefined,
+  amplitudeJawOpen: number,
+) {
+  const nextTargets = { ...(baseTargets ?? {}) };
+  const baseJawOpen = nextTargets.jawOpen ?? 0;
+  const jawCap = JAW_CAP_BY_PROFILE[profile];
+
+  nextTargets.jawOpen = Math.min(
+    jawCap,
+    Math.max(baseJawOpen, amplitudeJawOpen),
+  );
+
+  if (profile === "round") {
+    nextTargets.mouthStretchLeft = 0;
+    nextTargets.mouthStretchRight = 0;
+    nextTargets.mouthLowerDownLeft = Math.min(
+      nextTargets.mouthLowerDownLeft ?? 0,
+      0.06,
+    );
+    nextTargets.mouthLowerDownRight = Math.min(
+      nextTargets.mouthLowerDownRight ?? 0,
+      0.06,
+    );
+  }
+
+  if (profile === "wide") {
+    nextTargets.mouthFunnel = 0;
+    nextTargets.mouthPucker = 0;
+    nextTargets.mouthUpperUpLeft = Math.min(
+      nextTargets.mouthUpperUpLeft ?? 0,
+      0.06,
+    );
+    nextTargets.mouthUpperUpRight = Math.min(
+      nextTargets.mouthUpperUpRight ?? 0,
+      0.06,
+    );
+  }
+
+  if (profile === "open") {
+    nextTargets.mouthPucker = 0;
+    nextTargets.mouthFunnel = Math.min(nextTargets.mouthFunnel ?? 0, 0.08);
+    nextTargets.mouthLowerDownLeft = Math.min(
+      nextTargets.mouthLowerDownLeft ?? 0,
+      0.12,
+    );
+    nextTargets.mouthLowerDownRight = Math.min(
+      nextTargets.mouthLowerDownRight ?? 0,
+      0.12,
+    );
+  }
+
+  if (profile === "closed") {
+    nextTargets.mouthLowerDownLeft = 0;
+    nextTargets.mouthLowerDownRight = 0;
+    nextTargets.mouthFunnel = 0;
+    nextTargets.mouthPucker = Math.min(nextTargets.mouthPucker ?? 0, 0.08);
+  }
+
+  return nextTargets;
 }
 
 function getTrackTargetName(trackName: string) {
@@ -172,15 +316,18 @@ function AvatarModel({
   const compatibleClipName = useMemo(() => {
     return animations.find((clip) => clipTargetsExist(scene, clip))?.name;
   }, [animations, scene]);
-  const notifyFocusTargetChange = useEffectEvent((target: [number, number, number]) => {
-    onFocusTargetChange?.(target);
-  });
+  const notifyFocusTargetChange = useEffectEvent(
+    (target: [number, number, number]) => {
+      onFocusTargetChange?.(target);
+    },
+  );
 
   useEffect(() => {
     morphMeshesRef.current = collectMorphMeshes(scene);
 
     const bounds = new Box3().setFromObject(scene);
-    const headObject = scene.getObjectByName("Head") ?? scene.getObjectByName("Streamoji_Head");
+    const headObject =
+      scene.getObjectByName("Head") ?? scene.getObjectByName("Streamoji_Head");
 
     if (!headObject) {
       return;
@@ -191,7 +338,7 @@ function AvatarModel({
     const alignedHeadZ = headPosition.z;
 
     notifyFocusTargetChange([0, alignedHeadY, alignedHeadZ]);
-  }, [scene, notifyFocusTargetChange]);
+  }, [scene]);
 
   useEffect(() => {
     if (!compatibleClipName) {
@@ -220,12 +367,25 @@ function AvatarModel({
       if (activeCue) {
         speechOverrides = getCuePose(activeCue.value);
       }
-    } else if (analyserRef?.current && audioRef?.current && !audioRef.current.paused) {
+    } else if (
+      analyserRef?.current &&
+      audioRef?.current &&
+      !audioRef.current.paused
+    ) {
       const rawAmplitude = computeAmplitude(analyserRef.current);
-      smoothedAmplitudeRef.current = smoothedAmplitudeRef.current * AMPLITUDE_SMOOTHING + rawAmplitude * (1 - AMPLITUDE_SMOOTHING);
-      speechOverrides = {
-        jawOpen: Math.min(1, smoothedAmplitudeRef.current * JAW_OPEN_SCALE + JAW_OPEN_MIN),
-      };
+      smoothedAmplitudeRef.current =
+        smoothedAmplitudeRef.current * AMPLITUDE_SMOOTHING +
+        rawAmplitude * (1 - AMPLITUDE_SMOOTHING);
+      const amplitudeJawOpen = Math.min(
+        1,
+        smoothedAmplitudeRef.current * JAW_OPEN_SCALE + JAW_OPEN_MIN,
+      );
+      const profile = getSpeechProfile(facialTargetOverrides);
+      speechOverrides = createSafeSpeechOverrides(
+        profile,
+        facialTargetOverrides,
+        amplitudeJawOpen,
+      );
     } else {
       smoothedAmplitudeRef.current = 0;
     }
@@ -275,7 +435,11 @@ function SceneLights() {
         penumbra={0.9}
         position={[4.5, 5, 4]}
       />
-      <directionalLight color="#818cf8" intensity={1.6} position={[-4, 3, -2]} />
+      <directionalLight
+        color="#818cf8"
+        intensity={1.6}
+        position={[-4, 3, -2]}
+      />
       <directionalLight color="#f0abfc" intensity={1.1} position={[3, -2, 3]} />
     </>
   );
@@ -289,9 +453,7 @@ export default function AvatarScene({
   mouthCues,
 }: AvatarSceneProps) {
   const [focusTarget, setFocusTarget] = useState<[number, number, number]>([
-    0,
-    1.64,
-    0.01,
+    0, 1.64, 0.01,
   ]);
 
   return (
