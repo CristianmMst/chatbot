@@ -38,21 +38,23 @@ const replyFieldKeys = [
   "descripcion",
 ];
 
-function normalizeTextValue(value: unknown) {
+function normalizeTextValue(value: unknown): string | null {
   if (typeof value === "string") {
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
   }
 
   if (Array.isArray(value)) {
-    const parts = value.map(normalizeTextValue).filter((item): item is string => item !== null);
+    const parts: string[] = value
+      .map(normalizeTextValue)
+      .filter((item): item is string => item !== null);
     return parts.length > 0 ? parts.join(". ") : null;
   }
 
   return null;
 }
 
-function formatStructuredFields(parsed: Record<string, unknown>) {
+function formatStructuredFields(parsed: Record<string, unknown>): string | null {
   const entries = Object.entries(parsed).filter(([key]) => !["mood"].includes(key));
 
   if (entries.length === 0) {
@@ -110,7 +112,7 @@ function parseStructuredReply(payload: string): StructuredReply | null {
   }
 }
 
-export function getMissingLlmConfigMessage() {
+export function getMissingLlmConfigMessage(): string {
   const config = getLlmConfig();
 
   switch (config.provider) {
@@ -121,6 +123,57 @@ export function getMissingLlmConfigMessage() {
     default:
       return `Falta configurar LLM_API_KEY para el proveedor ${config.provider}.`;
   }
+}
+
+function getLlmErrorStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null) {
+    return null;
+  }
+
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
+function formatLlmError(error: unknown, provider: string): {
+  publicMessage: string;
+  status: number | null;
+  technicalMessage: string;
+} {
+  const status = getLlmErrorStatus(error);
+  const message = error instanceof Error ? error.message : "Error desconocido del proveedor LLM.";
+
+  if (status === 429) {
+    return {
+      publicMessage:
+        provider === "gemini"
+          ? "Gemini rechazo la solicitud por limite de uso o cuota agotada. Revisa tu cuota o intenta de nuevo en unos minutos."
+          : `El proveedor ${provider} rechazo la solicitud por limite de uso o cuota agotada. Intenta de nuevo en unos minutos.`,
+      status,
+      technicalMessage: message,
+    };
+  }
+
+  if (status === 401 || status === 403) {
+    return {
+      publicMessage: `El proveedor ${provider} rechazo la solicitud por credenciales o permisos invalidos.`,
+      status,
+      technicalMessage: message,
+    };
+  }
+
+  if (status !== null && status >= 500) {
+    return {
+      publicMessage: `El proveedor ${provider} fallo temporalmente al generar la respuesta.`,
+      status,
+      technicalMessage: message,
+    };
+  }
+
+  return {
+    publicMessage: `El proveedor ${provider} no pudo completar la respuesta.`,
+    status,
+    technicalMessage: message,
+  };
 }
 
 export async function generateRestrictedReply(
@@ -135,33 +188,48 @@ export async function generateRestrictedReply(
 
   const config = getLlmConfig();
   const instructionRole = config.provider === "gemini" ? "system" : "developer";
-  const completion = await client.chat.completions.create({
-    model: config.model,
-    temperature: 0.4,
-    messages: [
-      {
-        role: instructionRole,
-        content: [
-          "Eres un asistente conversacional para voz llamado Miguel.",
-          "Sigue la instruccion directa del usuario con la mayor fidelidad posible, salvo que sea insegura o imposible.",
-          "Si el usuario pregunta tu nombre, quien eres o como debe llamarte, responde claramente que te llamas Miguel.",
-          "Responde siempre en espanol, con tono natural y util para ser leido en voz alta.",
-          "Por defecto responde de forma breve, pero si el usuario pide mas detalle, explicacion o una respuesta larga, concedelo.",
-          "Si no sabes algo o te falta contexto, dilo con honestidad en lugar de inventar.",
-          "No cambies de tema ni rechaces preguntas normales del usuario sin motivo.",
-          "No uses markdown, listas largas ni bloques de codigo salvo que el usuario lo pida de forma explicita.",
-          "Devuelve solo JSON valido con las claves reply y mood.",
-          "mood debe ser friendly, neutral o serious.",
-        ].join("\n\n"),
-      },
-      ...history.map((item) => ({ content: item.content, role: item.role })),
-      {
-        role: "user",
-        content: message,
-      },
-    ],
-    response_format: { type: "json_object" },
-  });
+  let completion;
+
+  try {
+    completion = await client.chat.completions.create({
+      model: config.model,
+      temperature: 0.4,
+      messages: [
+        {
+          role: instructionRole,
+          content: [
+            "Eres un asistente conversacional para voz llamado Miguel.",
+            "Sigue la instruccion directa del usuario con la mayor fidelidad posible, salvo que sea insegura o imposible.",
+            "Si el usuario pregunta tu nombre, quien eres o como debe llamarte, responde claramente que te llamas Miguel.",
+            "Responde siempre en espanol, con tono natural y util para ser leido en voz alta.",
+            "Por defecto responde de forma breve, pero si el usuario pide mas detalle, explicacion o una respuesta larga, concedelo.",
+            "Si no sabes algo o te falta contexto, dilo con honestidad en lugar de inventar.",
+            "No cambies de tema ni rechaces preguntas normales del usuario sin motivo.",
+            "No uses markdown, listas largas ni bloques de codigo salvo que el usuario lo pida de forma explicita.",
+            "Devuelve solo JSON valido con las claves reply y mood.",
+            "mood debe ser friendly, neutral o serious.",
+          ].join("\n\n"),
+        },
+        ...history.map((item) => ({ content: item.content, role: item.role })),
+        {
+          role: "user",
+          content: message,
+        },
+      ],
+      response_format: { type: "json_object" },
+    });
+  } catch (error) {
+    const formattedError = formatLlmError(error, config.provider);
+
+    console.error("[llm:request-failed]", {
+      model: config.model,
+      provider: config.provider,
+      status: formattedError.status,
+      technicalMessage: formattedError.technicalMessage,
+    });
+
+    throw new Error(formattedError.publicMessage);
+  }
 
   const rawReply = completion.choices[0]?.message?.content ?? "";
   const structuredReply = parseStructuredReply(rawReply);
