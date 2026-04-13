@@ -18,6 +18,7 @@ type AvatarViewerProps = {
   audioRef?: React.RefObject<HTMLAudioElement | null>;
   facialControls?: FacialControls;
   facialTargetOverrides?: FacialTargetOverrides;
+  isIdle?: boolean;
   mouthCues?: MouthCue[];
 };
 
@@ -87,6 +88,7 @@ export default function AvatarViewer({
   audioRef,
   facialControls,
   facialTargetOverrides,
+  isIdle,
   mouthCues,
 }: AvatarViewerProps) {
   return (
@@ -97,6 +99,7 @@ export default function AvatarViewer({
           audioRef={audioRef}
           facialControls={facialControls}
           facialTargetOverrides={facialTargetOverrides}
+          isIdle={isIdle}
           mouthCues={mouthCues}
         />
       </SceneFrame>

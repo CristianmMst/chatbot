@@ -133,6 +133,7 @@ export default function AvatarExperience() {
           audioRef={audioRef}
           facialControls={facialControls}
           facialTargetOverrides={speechTargetOverrides}
+          isIdle={status === "idle"}
           mouthCues={mouthCues}
         />
       </div>
