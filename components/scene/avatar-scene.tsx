@@ -830,7 +830,7 @@ export default function AvatarScene({
           enableDamping
           enablePan={false}
           enableZoom
-          maxDistance={4.2}
+          maxDistance={2.6}
           minDistance={1.35}
           maxPolarAngle={Math.PI / 1.85}
           minPolarAngle={Math.PI / 2.3}
