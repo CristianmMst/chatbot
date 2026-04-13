@@ -52,6 +52,8 @@ type IdleRotationTargetKey =
   | "neck"
   | "chest"
   | "spine"
+  | "leftEye"
+  | "rightEye"
   | "leftArm"
   | "rightArm"
   | "leftShoulder"
@@ -80,6 +82,7 @@ const IDLE_HEAD_ROLL = 0.014;
 const IDLE_NECK_PITCH = 0.018;
 const IDLE_CHEST_PITCH = 0.012;
 const IDLE_SPINE_SWAY = 0.01;
+const IDLE_SMILE = 0.12;
 const IDLE_ARM_INWARD_YAW = 0.16;
 const IDLE_ARM_DROP = 0.32;
 const IDLE_ARM_ROLL = 0.06;
@@ -87,6 +90,9 @@ const IDLE_SHOULDER_SWING = 0.012;
 const IDLE_FOREARM_SWING = 0.009;
 const IDLE_FOREARM_BEND = 0.22;
 const IDLE_HAND_RELAX = 0.1;
+const IDLE_EYE_YAW = 0.12;
+const IDLE_EYE_PITCH = 0.055;
+const IDLE_EYE_DAMPING = 4.2;
 const IDLE_BLINK_CLOSE_DURATION = 0.085;
 const IDLE_BLINK_OPEN_DURATION = 0.14;
 
@@ -291,6 +297,17 @@ function randomBlinkInterval() {
   return MathUtils.randFloat(2.8, 5.6);
 }
 
+function randomEyeRetargetInterval() {
+  return MathUtils.randFloat(2.4, 4.8);
+}
+
+function randomEyeTarget() {
+  return {
+    pitch: MathUtils.randFloatSpread(IDLE_EYE_PITCH * 2),
+    yaw: MathUtils.randFloatSpread(IDLE_EYE_YAW * 2),
+  };
+}
+
 function getBlinkInfluence(blinkElapsed: number | null) {
   if (blinkElapsed === null) {
     return 0;
@@ -337,6 +354,8 @@ function resolveIdleRigTargets(root: Object3D): IdleRigTargets {
   const neck = root.getObjectByName("Neck") ?? findObjectByNameParts(root, ["neck"]);
   const chest = root.getObjectByName("Spine2") ?? findObjectByNameParts(root, ["chest", "upperchest", "spine2", "spine_02"]);
   const spine = root.getObjectByName("Spine1") ?? root.getObjectByName("Spine") ?? findObjectByNameParts(root, ["spine1", "spine", "spine_01"]);
+  const leftEye = root.getObjectByName("LeftEye") ?? findObjectByNameParts(root, ["lefteye", "eyeleft"]);
+  const rightEye = root.getObjectByName("RightEye") ?? findObjectByNameParts(root, ["righteye", "eyeright"]);
   const leftArm = findObjectByNameParts(root, [
     "leftarm",
     "LeftArm",
@@ -392,6 +411,8 @@ function resolveIdleRigTargets(root: Object3D): IdleRigTargets {
       neck,
       chest,
       spine,
+      leftEye,
+      rightEye,
       leftArm,
       rightArm,
       leftShoulder,
@@ -493,6 +514,9 @@ function AvatarModel({
   const idleElapsedRef = useRef(0);
   const nextBlinkAtRef = useRef(randomBlinkInterval());
   const blinkStartedAtRef = useRef<number | null>(null);
+  const nextEyeRetargetAtRef = useRef(randomEyeRetargetInterval());
+  const idleEyeTargetRef = useRef(randomEyeTarget());
+  const idleEyeCurrentRef = useRef({ pitch: 0, yaw: 0 });
   const { scene, animations } = useGLTF(siteConfig.modelPath);
   const { actions } = useAnimations(animations, group);
   const compatibleClipName = useMemo(() => {
@@ -621,6 +645,40 @@ function AvatarModel({
       merged.eyeBlinkRight = Math.max(merged.eyeBlinkRight ?? 0, idleBlink);
     }
 
+    if (isIdle) {
+      merged.mouthSmileLeft = Math.max(merged.mouthSmileLeft ?? 0, IDLE_SMILE);
+      merged.mouthSmileRight = Math.max(merged.mouthSmileRight ?? 0, IDLE_SMILE);
+    }
+
+    if (isIdle && idleElapsedRef.current >= nextEyeRetargetAtRef.current) {
+      idleEyeTargetRef.current = randomEyeTarget();
+      nextEyeRetargetAtRef.current = idleElapsedRef.current + randomEyeRetargetInterval();
+    }
+
+    const nextEyePitch = isIdle
+      ? MathUtils.damp(
+          idleEyeCurrentRef.current.pitch,
+          idleBlink > 0.15 ? 0 : idleEyeTargetRef.current.pitch,
+          IDLE_EYE_DAMPING,
+          delta,
+        )
+      : 0;
+    const nextEyeYaw = isIdle
+      ? MathUtils.damp(
+          idleEyeCurrentRef.current.yaw,
+          idleBlink > 0.15 ? 0 : idleEyeTargetRef.current.yaw,
+          IDLE_EYE_DAMPING,
+          delta,
+        )
+      : 0;
+
+    idleEyeCurrentRef.current = { pitch: nextEyePitch, yaw: nextEyeYaw };
+
+    if (!isIdle) {
+      nextEyeRetargetAtRef.current = randomEyeRetargetInterval();
+      idleEyeTargetRef.current = randomEyeTarget();
+    }
+
     const breathPhase = idleElapsedRef.current * Math.PI * 2 * IDLE_BREATH_SPEED;
     const headPhase = idleElapsedRef.current;
     const idleRigTargets = idleRigTargetsRef.current;
@@ -665,6 +723,26 @@ function AvatarModel({
             x: 0.016 + Math.sin(headPhase * 0.68) * IDLE_HEAD_PITCH * 0.55,
             y: Math.sin(headPhase * 0.4 + 1.2) * IDLE_HEAD_YAW * 0.48,
             z: -0.018 + Math.sin(headPhase * 0.5 + 2.1) * IDLE_HEAD_ROLL,
+          }
+        : { x: 0, y: 0, z: 0 },
+    );
+    applyRotationOffset(
+      idleRigTargets.leftEye,
+      isIdle
+        ? {
+            x: nextEyePitch,
+            y: nextEyeYaw,
+            z: 0,
+          }
+        : { x: 0, y: 0, z: 0 },
+    );
+    applyRotationOffset(
+      idleRigTargets.rightEye,
+      isIdle
+        ? {
+            x: nextEyePitch,
+            y: nextEyeYaw,
+            z: 0,
           }
         : { x: 0, y: 0, z: 0 },
     );
