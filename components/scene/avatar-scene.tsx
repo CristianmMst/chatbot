@@ -34,7 +34,6 @@ type AvatarSceneProps = {
   audioRef?: React.RefObject<HTMLAudioElement | null>;
   facialControls?: FacialControls;
   facialTargetOverrides?: FacialTargetOverrides;
-  isIdle?: boolean;
   mouthCues?: MouthCue[];
 };
 
@@ -441,12 +440,6 @@ function applyRotationOffset(
   target.offset = nextOffset;
 }
 
-function resetRotationOffsets(targets: IdleRigTargets) {
-  for (const target of Object.values(targets)) {
-    applyRotationOffset(target, { x: 0, y: 0, z: 0 });
-  }
-}
-
 function collectMorphMeshes(root: Object3D) {
   const morphMeshes: MorphMesh[] = [];
 
@@ -503,7 +496,6 @@ function AvatarModel({
   audioRef,
   facialControls = defaultFacialControls,
   facialTargetOverrides,
-  isIdle = false,
   mouthCues,
   onFocusTargetChange,
 }: AvatarModelProps) {
@@ -565,45 +557,31 @@ function AvatarModel({
     };
   }, [actions, compatibleClipName]);
 
-  useEffect(() => {
-    if (isIdle) {
-      return;
-    }
-
-    resetRotationOffsets(idleRigTargetsRef.current);
-  }, [isIdle]);
-
   useFrame((_, delta) => {
     let speechOverrides: FacialTargetOverrides = {};
     let idleBlink = 0;
 
-    if (isIdle) {
-      idleElapsedRef.current += delta;
+    idleElapsedRef.current += delta;
 
-      if (
-        blinkStartedAtRef.current === null &&
-        idleElapsedRef.current >= nextBlinkAtRef.current
-      ) {
-        blinkStartedAtRef.current = idleElapsedRef.current;
-      }
+    if (
+      blinkStartedAtRef.current === null &&
+      idleElapsedRef.current >= nextBlinkAtRef.current
+    ) {
+      blinkStartedAtRef.current = idleElapsedRef.current;
+    }
 
-      const blinkElapsed = blinkStartedAtRef.current === null
-        ? null
-        : idleElapsedRef.current - blinkStartedAtRef.current;
+    const blinkElapsed = blinkStartedAtRef.current === null
+      ? null
+      : idleElapsedRef.current - blinkStartedAtRef.current;
 
-      idleBlink = getBlinkInfluence(blinkElapsed);
+    idleBlink = getBlinkInfluence(blinkElapsed);
 
-      if (
-        blinkElapsed !== null &&
-        blinkElapsed >= IDLE_BLINK_CLOSE_DURATION + IDLE_BLINK_OPEN_DURATION
-      ) {
-        blinkStartedAtRef.current = null;
-        nextBlinkAtRef.current = idleElapsedRef.current + randomBlinkInterval();
-      }
-    } else {
-      idleElapsedRef.current = 0;
-      nextBlinkAtRef.current = randomBlinkInterval();
+    if (
+      blinkElapsed !== null &&
+      blinkElapsed >= IDLE_BLINK_CLOSE_DURATION + IDLE_BLINK_OPEN_DURATION
+    ) {
       blinkStartedAtRef.current = null;
+      nextBlinkAtRef.current = idleElapsedRef.current + randomBlinkInterval();
     }
 
     if (audioRef?.current && mouthCues && mouthCues.length > 0) {
@@ -645,39 +623,28 @@ function AvatarModel({
       merged.eyeBlinkRight = Math.max(merged.eyeBlinkRight ?? 0, idleBlink);
     }
 
-    if (isIdle) {
-      merged.mouthSmileLeft = Math.max(merged.mouthSmileLeft ?? 0, IDLE_SMILE);
-      merged.mouthSmileRight = Math.max(merged.mouthSmileRight ?? 0, IDLE_SMILE);
-    }
+    merged.mouthSmileLeft = Math.max(merged.mouthSmileLeft ?? 0, IDLE_SMILE);
+    merged.mouthSmileRight = Math.max(merged.mouthSmileRight ?? 0, IDLE_SMILE);
 
-    if (isIdle && idleElapsedRef.current >= nextEyeRetargetAtRef.current) {
+    if (idleElapsedRef.current >= nextEyeRetargetAtRef.current) {
       idleEyeTargetRef.current = randomEyeTarget();
       nextEyeRetargetAtRef.current = idleElapsedRef.current + randomEyeRetargetInterval();
     }
 
-    const nextEyePitch = isIdle
-      ? MathUtils.damp(
-          idleEyeCurrentRef.current.pitch,
-          idleBlink > 0.15 ? 0 : idleEyeTargetRef.current.pitch,
-          IDLE_EYE_DAMPING,
-          delta,
-        )
-      : 0;
-    const nextEyeYaw = isIdle
-      ? MathUtils.damp(
-          idleEyeCurrentRef.current.yaw,
-          idleBlink > 0.15 ? 0 : idleEyeTargetRef.current.yaw,
-          IDLE_EYE_DAMPING,
-          delta,
-        )
-      : 0;
+    const nextEyePitch = MathUtils.damp(
+      idleEyeCurrentRef.current.pitch,
+      idleBlink > 0.15 ? 0 : idleEyeTargetRef.current.pitch,
+      IDLE_EYE_DAMPING,
+      delta,
+    );
+    const nextEyeYaw = MathUtils.damp(
+      idleEyeCurrentRef.current.yaw,
+      idleBlink > 0.15 ? 0 : idleEyeTargetRef.current.yaw,
+      IDLE_EYE_DAMPING,
+      delta,
+    );
 
     idleEyeCurrentRef.current = { pitch: nextEyePitch, yaw: nextEyeYaw };
-
-    if (!isIdle) {
-      nextEyeRetargetAtRef.current = randomEyeRetargetInterval();
-      idleEyeTargetRef.current = randomEyeTarget();
-    }
 
     const breathPhase = idleElapsedRef.current * Math.PI * 2 * IDLE_BREATH_SPEED;
     const headPhase = idleElapsedRef.current;
@@ -688,143 +655,107 @@ function AvatarModel({
 
     applyRotationOffset(
       idleRigTargets.spine,
-      isIdle
-        ? {
-            x: softBreath * IDLE_CHEST_PITCH * 0.32,
-            y: softShift * IDLE_SPINE_SWAY * 0.45,
-            z: warmHeadTilt * IDLE_SPINE_SWAY * 0.18,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: softBreath * IDLE_CHEST_PITCH * 0.32,
+        y: softShift * IDLE_SPINE_SWAY * 0.45,
+        z: warmHeadTilt * IDLE_SPINE_SWAY * 0.18,
+      },
     );
     applyRotationOffset(
       idleRigTargets.chest,
-      isIdle
-        ? {
-            x: 0.03 + softBreath * IDLE_CHEST_PITCH,
-            y: softShift * IDLE_SPINE_SWAY * 0.55,
-            z: warmHeadTilt * IDLE_SPINE_SWAY * 0.26,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: 0.03 + softBreath * IDLE_CHEST_PITCH,
+        y: softShift * IDLE_SPINE_SWAY * 0.55,
+        z: warmHeadTilt * IDLE_SPINE_SWAY * 0.26,
+      },
     );
     applyRotationOffset(
       idleRigTargets.neck,
-      isIdle
-        ? {
-            x: 0.012 + Math.sin(headPhase * 0.62 + 0.5) * IDLE_NECK_PITCH,
-            y: Math.sin(headPhase * 0.45 + 1.4) * IDLE_HEAD_YAW * 0.28,
-            z: warmHeadTilt * IDLE_HEAD_ROLL * 0.55,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: 0.012 + Math.sin(headPhase * 0.62 + 0.5) * IDLE_NECK_PITCH,
+        y: Math.sin(headPhase * 0.45 + 1.4) * IDLE_HEAD_YAW * 0.28,
+        z: warmHeadTilt * IDLE_HEAD_ROLL * 0.55,
+      },
     );
     applyRotationOffset(
       idleRigTargets.head,
-      isIdle
-        ? {
-            x: 0.016 + Math.sin(headPhase * 0.68) * IDLE_HEAD_PITCH * 0.55,
-            y: Math.sin(headPhase * 0.4 + 1.2) * IDLE_HEAD_YAW * 0.48,
-            z: -0.018 + Math.sin(headPhase * 0.5 + 2.1) * IDLE_HEAD_ROLL,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: 0.016 + Math.sin(headPhase * 0.68) * IDLE_HEAD_PITCH * 0.55,
+        y: Math.sin(headPhase * 0.4 + 1.2) * IDLE_HEAD_YAW * 0.48,
+        z: -0.018 + Math.sin(headPhase * 0.5 + 2.1) * IDLE_HEAD_ROLL,
+      },
     );
     applyRotationOffset(
       idleRigTargets.leftEye,
-      isIdle
-        ? {
-            x: nextEyePitch,
-            y: nextEyeYaw,
-            z: 0,
-          }
-        : { x: 0, y: 0, z: 0 },
+      { x: nextEyePitch, y: nextEyeYaw, z: 0 },
     );
     applyRotationOffset(
       idleRigTargets.rightEye,
-      isIdle
-        ? {
-            x: nextEyePitch,
-            y: nextEyeYaw,
-            z: 0,
-          }
-        : { x: 0, y: 0, z: 0 },
+      { x: nextEyePitch, y: nextEyeYaw, z: 0 },
     );
     applyRotationOffset(
       idleRigTargets.leftShoulder,
-      isIdle
-        ? {
-            x: -0.08 + softBreath * IDLE_SHOULDER_SWING * 0.45,
-            y: 0.035 + softShift * IDLE_SHOULDER_SWING * 0.12,
-            z: 0.028,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: -0.08 + softBreath * IDLE_SHOULDER_SWING * 0.45,
+        y: 0.035 + softShift * IDLE_SHOULDER_SWING * 0.12,
+        z: 0.028,
+      },
     );
     applyRotationOffset(
       idleRigTargets.rightShoulder,
-      isIdle
-        ? {
-            x: -0.08 + softBreath * IDLE_SHOULDER_SWING * 0.45,
-            y: -0.035 + softShift * IDLE_SHOULDER_SWING * 0.12,
-            z: -0.028,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: -0.08 + softBreath * IDLE_SHOULDER_SWING * 0.45,
+        y: -0.035 + softShift * IDLE_SHOULDER_SWING * 0.12,
+        z: -0.028,
+      },
     );
     applyRotationOffset(
       idleRigTargets.leftArm,
-      isIdle
-        ? {
-            x: IDLE_ARM_DROP + softBreath * IDLE_SHOULDER_SWING * 0.25,
-            y: IDLE_ARM_INWARD_YAW + softShift * IDLE_SHOULDER_SWING * 0.08,
-            z: IDLE_ARM_ROLL,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: IDLE_ARM_DROP + softBreath * IDLE_SHOULDER_SWING * 0.25,
+        y: IDLE_ARM_INWARD_YAW + softShift * IDLE_SHOULDER_SWING * 0.08,
+        z: IDLE_ARM_ROLL,
+      },
     );
     applyRotationOffset(
       idleRigTargets.rightArm,
-      isIdle
-        ? {
-            x: IDLE_ARM_DROP + softBreath * IDLE_SHOULDER_SWING * 0.25,
-            y: -IDLE_ARM_INWARD_YAW + softShift * IDLE_SHOULDER_SWING * 0.08,
-            z: -IDLE_ARM_ROLL,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: IDLE_ARM_DROP + softBreath * IDLE_SHOULDER_SWING * 0.25,
+        y: -IDLE_ARM_INWARD_YAW + softShift * IDLE_SHOULDER_SWING * 0.08,
+        z: -IDLE_ARM_ROLL,
+      },
     );
     applyRotationOffset(
       idleRigTargets.leftForeArm,
-      isIdle
-        ? {
-            x: IDLE_FOREARM_BEND + IDLE_FOREARM_SWING * 0.6 + softBreath * IDLE_FOREARM_SWING * 0.35,
-            y: 0.018,
-            z: 0.032,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: IDLE_FOREARM_BEND + IDLE_FOREARM_SWING * 0.6 + softBreath * IDLE_FOREARM_SWING * 0.35,
+        y: 0.018,
+        z: 0.032,
+      },
     );
     applyRotationOffset(
       idleRigTargets.rightForeArm,
-      isIdle
-        ? {
-            x: IDLE_FOREARM_BEND + softBreath * IDLE_FOREARM_SWING * 0.35,
-            y: -0.018,
-            z: -0.032,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: IDLE_FOREARM_BEND + softBreath * IDLE_FOREARM_SWING * 0.35,
+        y: -0.018,
+        z: -0.032,
+      },
     );
     applyRotationOffset(
       idleRigTargets.leftHand,
-      isIdle
-        ? {
-            x: 0.02,
-            y: 0.03,
-            z: IDLE_HAND_RELAX,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: 0.02,
+        y: 0.03,
+        z: IDLE_HAND_RELAX,
+      },
     );
     applyRotationOffset(
       idleRigTargets.rightHand,
-      isIdle
-        ? {
-            x: 0.02,
-            y: -0.03,
-            z: -IDLE_HAND_RELAX,
-          }
-        : { x: 0, y: 0, z: 0 },
+      {
+        x: 0.02,
+        y: -0.03,
+        z: -IDLE_HAND_RELAX,
+      },
     );
 
     for (const mesh of morphMeshesRef.current) {
@@ -882,7 +813,6 @@ export default function AvatarScene({
   audioRef,
   facialControls,
   facialTargetOverrides,
-  isIdle,
   mouthCues,
 }: AvatarSceneProps) {
   const [focusTarget, setFocusTarget] = useState<[number, number, number]>([
@@ -899,7 +829,6 @@ export default function AvatarScene({
             audioRef={audioRef}
             facialControls={facialControls}
             facialTargetOverrides={facialTargetOverrides}
-            isIdle={isIdle}
             mouthCues={mouthCues}
             onFocusTargetChange={setFocusTarget}
           />

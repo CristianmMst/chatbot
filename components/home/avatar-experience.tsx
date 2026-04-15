@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import AvatarViewer from "@/components/scene/avatar-viewer";
 import {
   defaultFacialControls,
@@ -8,10 +8,15 @@ import {
   facialPresets,
   type FacialControls,
 } from "@/lib/avatar-face";
-import { useVoiceConversation, type VoiceStatus } from "@/components/home/use-voice-conversation";
+import {
+  useVoiceConversation,
+  type VoiceStatus,
+} from "@/components/home/use-voice-conversation";
 import { useSpeechFacialAnimation } from "@/components/home/use-speech-facial-animation";
 
-const facialControlKeys = Object.keys(defaultFacialControls) as Array<keyof FacialControls>;
+const facialControlKeys = Object.keys(defaultFacialControls) as Array<
+  keyof FacialControls
+>;
 
 function getStatusCopy(status: VoiceStatus) {
   switch (status) {
@@ -30,26 +35,22 @@ function getStatusCopy(status: VoiceStatus) {
   }
 }
 
-function getVoiceFacialControls(status: VoiceStatus, jawOpen: number): FacialControls {
+function getVoiceFacialControls(
+  status: VoiceStatus,
+  jawOpen: number,
+): FacialControls {
   switch (status) {
     case "listening":
       return {
-        smile: 0.1,
-        browsUp: 0.35,
-        browsDown: 0,
-        blink: 0,
-        jawOpen: 0.03,
-        frown: 0,
-      };
-    case "processing":
-      return {
         smile: 0,
-        browsUp: 0.08,
+        browsUp: 0.25,
         browsDown: 0,
         blink: 0,
         jawOpen: 0,
         frown: 0,
       };
+    case "processing":
+      return defaultFacialControls;
     case "speaking":
       return {
         smile: 0.2,
@@ -73,9 +74,35 @@ function getVoiceFacialControls(status: VoiceStatus, jawOpen: number): FacialCon
   }
 }
 
+function interpolateFacialControls(
+  from: FacialControls,
+  to: FacialControls,
+  progress: number,
+): FacialControls {
+  return {
+    smile: from.smile + (to.smile - from.smile) * progress,
+    browsUp: from.browsUp + (to.browsUp - from.browsUp) * progress,
+    browsDown: from.browsDown + (to.browsDown - from.browsDown) * progress,
+    blink: from.blink + (to.blink - from.blink) * progress,
+    jawOpen: from.jawOpen + (to.jawOpen - from.jawOpen) * progress,
+    frown: from.frown + (to.frown - from.frown) * progress,
+  };
+}
+
+function easeOutCubic(value: number) {
+  return 1 - Math.pow(1 - value, 3);
+}
+
 export default function AvatarExperience() {
-  const [isFacialControlMinimized, setIsFacialControlMinimized] = useState(true);
-  const [manualFacialControls, setManualFacialControls] = useState(defaultFacialControls);
+  const [isFacialControlMinimized, setIsFacialControlMinimized] =
+    useState(true);
+  const [manualFacialControls, setManualFacialControls] = useState(
+    defaultFacialControls,
+  );
+  const [animatedFacialControls, setAnimatedFacialControls] = useState(
+    defaultFacialControls,
+  );
+  const animatedFacialControlsRef = useRef(defaultFacialControls);
   const {
     analyserRef,
     audioRef,
@@ -108,10 +135,44 @@ export default function AvatarExperience() {
     () => getVoiceFacialControls(status, status === "speaking" ? 0.08 : 0),
     [status],
   );
-  const facialControls = status === "idle" || status === "unsupported"
-    ? manualFacialControls
-    : voiceFacialControls;
-  const helperMessage = errorMessage ??
+  const facialControlTarget =
+    status === "idle" || status === "unsupported"
+      ? manualFacialControls
+      : voiceFacialControls;
+
+  useEffect(() => {
+    let frameId = 0;
+    let startTime = 0;
+    const duration = status === "speaking" ? 140 : 180;
+    const from = animatedFacialControlsRef.current;
+
+    const step = () => {
+      const progress = Math.min(1, (performance.now() - startTime) / duration);
+      const nextControls = interpolateFacialControls(
+        from,
+        facialControlTarget,
+        easeOutCubic(progress),
+      );
+
+      animatedFacialControlsRef.current = nextControls;
+      setAnimatedFacialControls(nextControls);
+
+      if (progress < 1) {
+        frameId = window.requestAnimationFrame(step);
+      }
+    };
+
+    startTime = performance.now();
+    frameId = window.requestAnimationFrame(step);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [facialControlTarget, status]);
+
+  const facialControls = animatedFacialControls;
+  const helperMessage =
+    errorMessage ??
     (!hasResolvedSupport
       ? "Comprobando compatibilidad de voz del navegador..."
       : isSupported
@@ -133,7 +194,6 @@ export default function AvatarExperience() {
           audioRef={audioRef}
           facialControls={facialControls}
           facialTargetOverrides={speechTargetOverrides}
-          isIdle={status === "idle"}
           mouthCues={mouthCues}
         />
       </div>
@@ -142,7 +202,9 @@ export default function AvatarExperience() {
         <header className="flex justify-center sm:justify-start">
           <div className="flex items-center gap-3 opacity-40 transition-opacity hover:opacity-100">
             <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/5 ring-1 ring-white/10 backdrop-blur-md">
-              <span className="text-[10px] font-bold tracking-[0.3em] text-white">AV</span>
+              <span className="text-[10px] font-bold tracking-[0.3em] text-white">
+                AV
+              </span>
             </div>
             <span className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-400">
               Aura Voice
@@ -188,10 +250,18 @@ export default function AvatarExperience() {
 
             <div className="mt-4 flex items-center gap-4">
               <button
-                aria-label={status === "listening" ? "Detener escucha" : "Hablar"}
+                aria-label={
+                  status === "listening" ? "Detener escucha" : "Hablar"
+                }
                 className="group relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white/5 text-zinc-300 ring-1 ring-white/10 backdrop-blur-2xl transition-all hover:scale-105 hover:bg-white/10 hover:text-white hover:ring-white/20 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!hasResolvedSupport || !isSupported || status === "processing"}
-                onClick={status === "listening" || status === "speaking" ? stopAll : startListening}
+                disabled={
+                  !hasResolvedSupport || !isSupported || status === "processing"
+                }
+                onClick={
+                  status === "listening" || status === "speaking"
+                    ? stopAll
+                    : startListening
+                }
                 type="button"
               >
                 <div className="absolute inset-0 rounded-full bg-white/5 opacity-0 blur-xl transition-opacity group-hover:opacity-100" />
@@ -219,7 +289,11 @@ export default function AvatarExperience() {
                 </div>
                 <button
                   className="self-start rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:border-white/20 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={!canReplayLastReply || status === "processing" || status === "listening"}
+                  disabled={
+                    !canReplayLastReply ||
+                    status === "processing" ||
+                    status === "listening"
+                  }
                   onClick={() => {
                     void replayLastReply();
                   }}
@@ -255,23 +329,55 @@ export default function AvatarExperience() {
               </button>
               <button
                 className="flex h-6 w-6 items-center justify-center rounded-full border border-white/10 text-zinc-300 transition hover:border-white/20 hover:text-white"
-                onClick={() => setIsFacialControlMinimized(!isFacialControlMinimized)}
+                onClick={() =>
+                  setIsFacialControlMinimized(!isFacialControlMinimized)
+                }
                 type="button"
-                title={isFacialControlMinimized ? "Maximizar panel" : "Minimizar panel"}
+                title={
+                  isFacialControlMinimized
+                    ? "Maximizar panel"
+                    : "Minimizar panel"
+                }
               >
                 {isFacialControlMinimized ? (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="18 15 12 9 6 15"></polyline>
+                  </svg>
                 ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                  </svg>
                 )}
               </button>
             </div>
           </div>
 
-            <div className={`transition-all duration-300 overflow-hidden ${isFacialControlMinimized ? 'h-0 opacity-0 mt-0' : 'h-auto opacity-100 mt-4'}`}>
-              <div className="mb-4 flex flex-wrap gap-2">
-                {facialPresets.map((preset) => (
-                  <button
+          <div
+            className={`transition-all duration-300 overflow-hidden ${isFacialControlMinimized ? "h-0 opacity-0 mt-0" : "h-auto opacity-100 mt-4"}`}
+          >
+            <div className="mb-4 flex flex-wrap gap-2">
+              {facialPresets.map((preset) => (
+                <button
                   key={preset.label}
                   className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:border-cyan-300/40 hover:bg-cyan-300/10 hover:text-white"
                   onClick={() => setManualFacialControls(preset.controls)}
@@ -296,7 +402,9 @@ export default function AvatarExperience() {
                     className="h-2 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-cyan-300"
                     max="1"
                     min="0"
-                    onChange={(event) => updateControl(control, Number(event.target.value))}
+                    onChange={(event) =>
+                      updateControl(control, Number(event.target.value))
+                    }
                     step="0.01"
                     type="range"
                     value={manualFacialControls[control]}
