@@ -316,6 +316,10 @@ export function useVoiceConversation(): VoiceConversationState {
         setSpeechCharIndex(Math.min(speech.text.length, Math.floor(speech.text.length * progress)));
       };
       audio.onended = () => {
+        audio.onplay = null;
+        audio.ontimeupdate = null;
+        audio.onended = null;
+        audio.onerror = null;
         resetSpeechState();
         setStatus("idle");
         stopCurrentAudio();
