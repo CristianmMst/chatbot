@@ -10,7 +10,6 @@ import {
 } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import {
-  Center,
   OrbitControls,
   useAnimations,
   useGLTF,
@@ -597,6 +596,9 @@ function AvatarModel({
   const idleEyeCurrentRef = useRef({ pitch: 0, yaw: 0 });
   const curiousLookRef = useRef<CuriousLook | null>(null);
   const nextCuriousAtRef = useRef(randomCuriousInterval());
+  const [modelOffset, setModelOffset] = useState<[number, number, number]>([
+    0, 0, 0,
+  ]);
   const { scene, animations } = useGLTF(siteConfig.modelPath);
   const { actions } = useAnimations(animations, group);
   const compatibleClipName = useMemo(() => {
@@ -612,19 +614,39 @@ function AvatarModel({
     morphMeshesRef.current = collectMorphMeshes(scene);
     idleRigTargetsRef.current = resolveIdleRigTargets(scene);
 
-    const bounds = new Box3().setFromObject(scene);
-    const headObject =
-      scene.getObjectByName("Head") ?? scene.getObjectByName("Streamoji_Head");
+    // Ensure world matrices are computed before measuring bounds so that
+    // skinned meshes and nested transforms contribute correctly.
+    scene.updateMatrixWorld(true);
 
-    if (!headObject) {
-      return;
+    const bounds = new Box3().setFromObject(scene);
+    const center = bounds.getCenter(new Vector3());
+    const size = bounds.getSize(new Vector3());
+
+    // Center the model horizontally (X/Z) and place its feet on the floor (Y=0).
+    setModelOffset([-center.x, -bounds.min.y, -center.z]);
+
+    const headObject =
+      scene.getObjectByName("Head") ??
+      scene.getObjectByName("mixamorig:Head") ??
+      scene.getObjectByName("Streamoji_Head");
+
+    if (headObject) {
+      const headPosition = headObject.getWorldPosition(new Vector3());
+      const alignedHeadX = headPosition.x - center.x;
+      const alignedHeadY = headPosition.y - bounds.min.y;
+      const alignedHeadZ = headPosition.z - center.z;
+
+      // Some skeletons export head bones at the root origin or chest height.
+      // Only trust the bone when it sits in the upper half of the model.
+      if (alignedHeadY > size.y * 0.5) {
+        notifyFocusTargetChange([alignedHeadX, alignedHeadY, alignedHeadZ]);
+        return;
+      }
     }
 
-    const headPosition = headObject.getWorldPosition(new Vector3());
-    const alignedHeadY = headPosition.y - bounds.min.y;
-    const alignedHeadZ = headPosition.z;
-
-    notifyFocusTargetChange([0, alignedHeadY, alignedHeadZ]);
+    // Fallback: estimate eye-level from the bounding box so the camera
+    // focuses on the face regardless of skeleton naming or rig differences.
+    notifyFocusTargetChange([0, bounds.max.y * 0.88, 0]);
   }, [scene]);
 
   useEffect(() => {
@@ -902,11 +924,11 @@ function AvatarModel({
   });
 
   return (
-    <Center top>
+    <group position={modelOffset}>
       <group ref={group}>
         <primitive object={scene} />
       </group>
-    </Center>
+    </group>
   );
 }
 
