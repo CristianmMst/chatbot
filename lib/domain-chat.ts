@@ -1,5 +1,6 @@
 import { getLlmClient } from "@/lib/llm-client";
 import { getLlmConfig } from "@/lib/llm-config";
+import { getSystemInstruction, type PromptMode } from "@/lib/prompts/system-instruction";
 
 export type ChatMessage = {
   content: string;
@@ -179,6 +180,7 @@ function formatLlmError(error: unknown, provider: string): {
 export async function generateRestrictedReply(
   message: string,
   history: ChatMessage[],
+  options?: { mode?: PromptMode },
 ): Promise<StructuredReply> {
   const client = getLlmClient();
 
@@ -187,6 +189,7 @@ export async function generateRestrictedReply(
   }
 
   const config = getLlmConfig();
+  const mode = options?.mode ?? "conversation";
   const instructionRole = config.provider === "gemini" ? "system" : "developer";
   let completion;
 
@@ -197,18 +200,7 @@ export async function generateRestrictedReply(
       messages: [
         {
           role: instructionRole,
-          content: [
-            "Eres un asistente conversacional para voz llamado Miguel.",
-            "Sigue la instruccion directa del usuario con la mayor fidelidad posible, salvo que sea insegura o imposible.",
-            "Si el usuario pregunta tu nombre, quien eres o como debe llamarte, responde claramente que te llamas Miguel.",
-            "Responde siempre en espanol, con tono natural y util para ser leido en voz alta.",
-            "Por defecto responde de forma breve, pero si el usuario pide mas detalle, explicacion o una respuesta larga, concedelo.",
-            "Si no sabes algo o te falta contexto, dilo con honestidad en lugar de inventar.",
-            "No cambies de tema ni rechaces preguntas normales del usuario sin motivo.",
-            "No uses markdown, listas largas ni bloques de codigo salvo que el usuario lo pida de forma explicita.",
-            "Devuelve solo JSON valido con las claves reply y mood.",
-            "mood debe ser friendly, neutral o serious.",
-          ].join("\n\n"),
+          content: getSystemInstruction(mode),
         },
         ...history.map((item) => ({ content: item.content, role: item.role })),
         {
