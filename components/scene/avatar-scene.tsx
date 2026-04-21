@@ -4,7 +4,6 @@ import {
   Suspense,
   useEffect,
   useEffectEvent,
-  useMemo,
   useRef,
   useState,
 } from "react";
@@ -14,8 +13,8 @@ import {
   useAnimations,
   useGLTF,
 } from "@react-three/drei";
-import { Box3, MathUtils, Vector3 } from "three";
-import type { AnimationClip, Group, Mesh, Object3D } from "three";
+import { Box3, LoopOnce, LoopRepeat, MathUtils, Vector3 } from "three";
+import type { AnimationAction, Group, Mesh, Object3D } from "three";
 import {
   defaultFacialControls,
   facialTargetMap,
@@ -101,6 +100,17 @@ const SHOULDER_COUNTER_ROLL = 0.01;
 const CURIOUS_LOOK_MIN_INTERVAL = 8;
 const CURIOUS_LOOK_MAX_INTERVAL = 15;
 const CURIOUS_LOOK_DURATION = 4.0;
+
+// ── Base Random Animation System ──────────────────────────────
+const IDLE_CLIP_NAME = "Idle.001";
+const RANDOM_IDLE_CLIPS = [
+  { name: "LookAway.001", weight: 5 },
+  { name: "NeckStretching.001", weight: 3 },
+  { name: "Petting.001", weight: 2 },
+] as const;
+const RANDOM_ANIMATION_MIN_INTERVAL = 8;
+const RANDOM_ANIMATION_MAX_INTERVAL = 20;
+const RANDOM_ANIMATION_CROSSFADE = 0.5;
 
 const JAW_CAP_BY_PROFILE: Record<SpeechVisemeProfile, number> = {
   closed: 0.08,
@@ -279,22 +289,6 @@ function createSafeSpeechOverrides(
   return nextTargets;
 }
 
-function getTrackTargetName(trackName: string) {
-  return trackName.split(".")[0]?.trim() ?? "";
-}
-
-function clipTargetsExist(root: Object3D, clip: AnimationClip) {
-  return clip.tracks.every((track) => {
-    const targetName = getTrackTargetName(track.name);
-
-    if (!targetName || targetName === root.name) {
-      return true;
-    }
-
-    return root.getObjectByName(targetName) !== undefined;
-  });
-}
-
 function clampControlValue(value: number | undefined) {
   return MathUtils.clamp(value ?? 0, 0, 1);
 }
@@ -339,6 +333,31 @@ function easeOutQuint(t: number) {
 
 function randomCuriousInterval() {
   return MathUtils.randFloat(CURIOUS_LOOK_MIN_INTERVAL, CURIOUS_LOOK_MAX_INTERVAL);
+}
+
+function randomAnimationInterval() {
+  return MathUtils.randFloat(
+    RANDOM_ANIMATION_MIN_INTERVAL,
+    RANDOM_ANIMATION_MAX_INTERVAL,
+  );
+}
+
+function pickWeightedRandomClip(
+  clips: readonly { name: string; weight: number }[],
+  exclude?: string,
+): string {
+  const available = exclude
+    ? clips.filter((c) => c.name !== exclude)
+    : [...clips];
+  const totalWeight = available.reduce((sum, c) => sum + c.weight, 0);
+  let random = Math.random() * totalWeight;
+
+  for (const clip of available) {
+    random -= clip.weight;
+    if (random <= 0) return clip.name;
+  }
+
+  return available[available.length - 1]?.name ?? clips[0].name;
 }
 
 function scheduleCuriousLook(elapsed: number): CuriousLook {
@@ -596,14 +615,18 @@ function AvatarModel({
   const idleEyeCurrentRef = useRef({ pitch: 0, yaw: 0 });
   const curiousLookRef = useRef<CuriousLook | null>(null);
   const nextCuriousAtRef = useRef(randomCuriousInterval());
+  const animStateRef = useRef({
+    mode: "idle" as "idle" | "playing" | "returning",
+    currentSecondary: null as string | null,
+    nextTriggerAt: randomAnimationInterval(),
+    cooldownEndAt: 0,
+  });
+  const lastSecondaryClipRef = useRef<string | null>(null);
   const [modelOffset, setModelOffset] = useState<[number, number, number]>([
     0, 0, 0,
   ]);
   const { scene, animations } = useGLTF(siteConfig.modelPath);
-  const { actions } = useAnimations(animations, group);
-  const compatibleClipName = useMemo(() => {
-    return animations.find((clip) => clipTargetsExist(scene, clip))?.name;
-  }, [animations, scene]);
+  const { actions, mixer } = useAnimations(animations, group);
   const notifyFocusTargetChange = useEffectEvent(
     (target: [number, number, number]) => {
       onFocusTargetChange?.(target);
@@ -650,22 +673,60 @@ function AvatarModel({
   }, [scene]);
 
   useEffect(() => {
-    if (!compatibleClipName) {
-      return;
+    const idleAction = actions[IDLE_CLIP_NAME];
+    if (!idleAction || !mixer) return;
+
+    idleAction.setLoop(LoopRepeat, Infinity);
+    // eslint-disable-next-line react-hooks/immutability
+    idleAction.clampWhenFinished = false;
+    idleAction.enabled = true;
+    idleAction.setEffectiveTimeScale(1);
+    idleAction.setEffectiveWeight(1);
+    idleAction.reset().play();
+
+    animStateRef.current = {
+      mode: "idle",
+      currentSecondary: null,
+      nextTriggerAt: randomAnimationInterval(),
+      cooldownEndAt: 0,
+    };
+
+    function onFinished(event: { action: AnimationAction }) {
+      if (!idleAction) return;
+
+      const animState = animStateRef.current;
+      if (
+        animState.mode !== "playing" ||
+        !animState.currentSecondary ||
+        event.action.getClip().name !== animState.currentSecondary
+      ) {
+        return;
+      }
+
+      const secondaryAction = actions[animState.currentSecondary];
+      if (secondaryAction) {
+        idleAction.enabled = true;
+        idleAction.setEffectiveTimeScale(1);
+        idleAction.setEffectiveWeight(1);
+        idleAction.play();
+        secondaryAction.crossFadeTo(idleAction, RANDOM_ANIMATION_CROSSFADE, false);
+      }
+
+      animState.mode = "returning";
+      animState.cooldownEndAt = idleElapsedRef.current + RANDOM_ANIMATION_CROSSFADE;
     }
 
-    const action = actions[compatibleClipName];
-
-    if (!action) {
-      return;
-    }
-
-    action.reset().fadeIn(0.35).play();
+    mixer.addEventListener("finished", onFinished);
 
     return () => {
-      action.fadeOut(0.25);
+      mixer.removeEventListener("finished", onFinished);
+      idleAction.stop();
+      if (animStateRef.current.currentSecondary) {
+        const secondaryAction = actions[animStateRef.current.currentSecondary];
+        secondaryAction?.stop();
+      }
     };
-  }, [actions, compatibleClipName]);
+  }, [actions, mixer]);
 
   useFrame((_, delta) => {
     let speechOverrides: FacialTargetOverrides = {};
@@ -919,6 +980,51 @@ function AvatarModel({
           getDampingLambda(targetName),
           delta,
         );
+      }
+    }
+
+    // ── Base Random Animation System ─────────────────────────────
+    const idleAction = actions[IDLE_CLIP_NAME];
+    if (idleAction) {
+      const animState = animStateRef.current;
+
+      if (animState.mode === "idle") {
+        if (idleElapsedRef.current >= animState.nextTriggerAt) {
+          const clipName = pickWeightedRandomClip(
+            RANDOM_IDLE_CLIPS,
+            lastSecondaryClipRef.current ?? undefined,
+          );
+          const secondaryAction = actions[clipName];
+
+          if (secondaryAction) {
+            // eslint-disable-next-line react-hooks/immutability
+            secondaryAction.enabled = true;
+            secondaryAction.setEffectiveTimeScale(1);
+            secondaryAction.setEffectiveWeight(1);
+            secondaryAction.setLoop(LoopOnce, 1);
+            secondaryAction.clampWhenFinished = true;
+            secondaryAction.reset().play();
+            secondaryAction.crossFadeFrom(idleAction, RANDOM_ANIMATION_CROSSFADE, false);
+
+            animState.mode = "playing";
+            animState.currentSecondary = clipName;
+            lastSecondaryClipRef.current = clipName;
+          } else {
+            animState.nextTriggerAt =
+              idleElapsedRef.current + randomAnimationInterval();
+          }
+        }
+      } else if (animState.mode === "returning") {
+        if (idleElapsedRef.current >= animState.cooldownEndAt) {
+          if (animState.currentSecondary) {
+            const secondaryAction = actions[animState.currentSecondary];
+            secondaryAction?.stop();
+          }
+
+          animState.mode = "idle";
+          animState.currentSecondary = null;
+          animState.nextTriggerAt = idleElapsedRef.current + randomAnimationInterval();
+        }
       }
     }
   });
