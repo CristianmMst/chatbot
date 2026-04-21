@@ -67,6 +67,18 @@ type IdleRotationTarget = {
 
 type IdleRigTargets = Partial<Record<IdleRotationTargetKey, IdleRotationTarget>>;
 
+type BaseAnimationState = {
+  mode: "idle" | "playing" | "returning";
+  currentSecondary: string | null;
+  nextTriggerAt: number;
+  cooldownEndAt: number;
+};
+
+type WeightedClipConfig = {
+  name: string;
+  weight: number;
+};
+
 const EMOTIONAL_DAMPING = 12;
 const SPEECH_DAMPING = 35;
 const AMPLITUDE_SMOOTHING = 0.6;
@@ -101,16 +113,19 @@ const CURIOUS_LOOK_MIN_INTERVAL = 8;
 const CURIOUS_LOOK_MAX_INTERVAL = 15;
 const CURIOUS_LOOK_DURATION = 4.0;
 
-// ── Base Random Animation System ──────────────────────────────
-const IDLE_CLIP_NAME = "Idle.001";
-const RANDOM_IDLE_CLIPS = [
-  { name: "LookAway.001", weight: 5 },
-  { name: "NeckStretching.001", weight: 3 },
-  { name: "Petting.001", weight: 2 },
-] as const;
-const RANDOM_ANIMATION_MIN_INTERVAL = 8;
-const RANDOM_ANIMATION_MAX_INTERVAL = 20;
-const RANDOM_ANIMATION_CROSSFADE = 0.5;
+const BASE_ANIMATION_CONFIG = {
+  idle: "Idle.001",
+  variants: [
+    { name: "LookAway.001", weight: 5 },
+    { name: "NeckStretching.001", weight: 3 },
+    { name: "Petting.001", weight: 2 },
+  ] satisfies WeightedClipConfig[],
+  interval: {
+    min: 8,
+    max: 20,
+  },
+  fade: 0.5,
+} as const;
 
 const JAW_CAP_BY_PROFILE: Record<SpeechVisemeProfile, number> = {
   closed: 0.08,
@@ -337,13 +352,13 @@ function randomCuriousInterval() {
 
 function randomAnimationInterval() {
   return MathUtils.randFloat(
-    RANDOM_ANIMATION_MIN_INTERVAL,
-    RANDOM_ANIMATION_MAX_INTERVAL,
+    BASE_ANIMATION_CONFIG.interval.min,
+    BASE_ANIMATION_CONFIG.interval.max,
   );
 }
 
 function pickWeightedRandomClip(
-  clips: readonly { name: string; weight: number }[],
+  clips: readonly WeightedClipConfig[],
   exclude?: string,
 ): string {
   const available = exclude
@@ -358,6 +373,71 @@ function pickWeightedRandomClip(
   }
 
   return available[available.length - 1]?.name ?? clips[0].name;
+}
+
+function createInitialBaseAnimationState(): BaseAnimationState {
+  return {
+    mode: "idle",
+    currentSecondary: null,
+    nextTriggerAt: randomAnimationInterval(),
+    cooldownEndAt: 0,
+  };
+}
+
+function scheduleNextBaseAnimation(state: BaseAnimationState, now: number) {
+  state.nextTriggerAt = now + randomAnimationInterval();
+}
+
+function configureIdleAction(idleAction: AnimationAction) {
+  idleAction.setLoop(LoopRepeat, Infinity);
+  idleAction.clampWhenFinished = false;
+  idleAction.enabled = true;
+  idleAction.setEffectiveTimeScale(1);
+  idleAction.setEffectiveWeight(1);
+  idleAction.reset().play();
+}
+
+function prepareIdleReturn(idleAction: AnimationAction) {
+  idleAction.enabled = true;
+  idleAction.setEffectiveTimeScale(1);
+  idleAction.setEffectiveWeight(1);
+  idleAction.play();
+}
+
+function configureSecondaryAction(secondaryAction: AnimationAction) {
+  secondaryAction.enabled = true;
+  secondaryAction.setEffectiveTimeScale(1);
+  secondaryAction.setEffectiveWeight(1);
+  secondaryAction.setLoop(LoopOnce, 1);
+  secondaryAction.clampWhenFinished = true;
+  secondaryAction.reset().play();
+}
+
+function playSecondaryFromIdle(
+  idleAction: AnimationAction,
+  secondaryAction: AnimationAction,
+) {
+  configureSecondaryAction(secondaryAction);
+  secondaryAction.crossFadeFrom(idleAction, BASE_ANIMATION_CONFIG.fade, false);
+}
+
+function returnSecondaryToIdle(
+  idleAction: AnimationAction,
+  secondaryAction: AnimationAction,
+) {
+  prepareIdleReturn(idleAction);
+  secondaryAction.crossFadeTo(idleAction, BASE_ANIMATION_CONFIG.fade, false);
+}
+
+function beginBaseAnimationReturn(state: BaseAnimationState, now: number) {
+  state.mode = "returning";
+  state.cooldownEndAt = now + BASE_ANIMATION_CONFIG.fade;
+}
+
+function finishBaseAnimationReturn(state: BaseAnimationState, now: number) {
+  state.mode = "idle";
+  state.currentSecondary = null;
+  scheduleNextBaseAnimation(state, now);
 }
 
 function scheduleCuriousLook(elapsed: number): CuriousLook {
@@ -615,12 +695,7 @@ function AvatarModel({
   const idleEyeCurrentRef = useRef({ pitch: 0, yaw: 0 });
   const curiousLookRef = useRef<CuriousLook | null>(null);
   const nextCuriousAtRef = useRef(randomCuriousInterval());
-  const animStateRef = useRef({
-    mode: "idle" as "idle" | "playing" | "returning",
-    currentSecondary: null as string | null,
-    nextTriggerAt: randomAnimationInterval(),
-    cooldownEndAt: 0,
-  });
+  const animStateRef = useRef<BaseAnimationState>(createInitialBaseAnimationState());
   const lastSecondaryClipRef = useRef<string | null>(null);
   const [modelOffset, setModelOffset] = useState<[number, number, number]>([
     0, 0, 0,
@@ -673,27 +748,14 @@ function AvatarModel({
   }, [scene]);
 
   useEffect(() => {
-    const idleAction = actions[IDLE_CLIP_NAME];
+    const idleAction = actions[BASE_ANIMATION_CONFIG.idle];
     if (!idleAction || !mixer) return;
+    const activeIdleAction = idleAction;
 
-    idleAction.setLoop(LoopRepeat, Infinity);
-    // eslint-disable-next-line react-hooks/immutability
-    idleAction.clampWhenFinished = false;
-    idleAction.enabled = true;
-    idleAction.setEffectiveTimeScale(1);
-    idleAction.setEffectiveWeight(1);
-    idleAction.reset().play();
-
-    animStateRef.current = {
-      mode: "idle",
-      currentSecondary: null,
-      nextTriggerAt: randomAnimationInterval(),
-      cooldownEndAt: 0,
-    };
+    configureIdleAction(activeIdleAction);
+    animStateRef.current = createInitialBaseAnimationState();
 
     function onFinished(event: { action: AnimationAction }) {
-      if (!idleAction) return;
-
       const animState = animStateRef.current;
       if (
         animState.mode !== "playing" ||
@@ -705,22 +767,17 @@ function AvatarModel({
 
       const secondaryAction = actions[animState.currentSecondary];
       if (secondaryAction) {
-        idleAction.enabled = true;
-        idleAction.setEffectiveTimeScale(1);
-        idleAction.setEffectiveWeight(1);
-        idleAction.play();
-        secondaryAction.crossFadeTo(idleAction, RANDOM_ANIMATION_CROSSFADE, false);
+        returnSecondaryToIdle(activeIdleAction, secondaryAction);
       }
 
-      animState.mode = "returning";
-      animState.cooldownEndAt = idleElapsedRef.current + RANDOM_ANIMATION_CROSSFADE;
+      beginBaseAnimationReturn(animState, idleElapsedRef.current);
     }
 
     mixer.addEventListener("finished", onFinished);
 
     return () => {
       mixer.removeEventListener("finished", onFinished);
-      idleAction.stop();
+      activeIdleAction.stop();
       if (animStateRef.current.currentSecondary) {
         const secondaryAction = actions[animStateRef.current.currentSecondary];
         secondaryAction?.stop();
@@ -984,34 +1041,26 @@ function AvatarModel({
     }
 
     // ── Base Random Animation System ─────────────────────────────
-    const idleAction = actions[IDLE_CLIP_NAME];
+    const idleAction = actions[BASE_ANIMATION_CONFIG.idle];
     if (idleAction) {
       const animState = animStateRef.current;
 
       if (animState.mode === "idle") {
         if (idleElapsedRef.current >= animState.nextTriggerAt) {
           const clipName = pickWeightedRandomClip(
-            RANDOM_IDLE_CLIPS,
+            BASE_ANIMATION_CONFIG.variants,
             lastSecondaryClipRef.current ?? undefined,
           );
           const secondaryAction = actions[clipName];
 
           if (secondaryAction) {
-            // eslint-disable-next-line react-hooks/immutability
-            secondaryAction.enabled = true;
-            secondaryAction.setEffectiveTimeScale(1);
-            secondaryAction.setEffectiveWeight(1);
-            secondaryAction.setLoop(LoopOnce, 1);
-            secondaryAction.clampWhenFinished = true;
-            secondaryAction.reset().play();
-            secondaryAction.crossFadeFrom(idleAction, RANDOM_ANIMATION_CROSSFADE, false);
+            playSecondaryFromIdle(idleAction, secondaryAction);
 
             animState.mode = "playing";
             animState.currentSecondary = clipName;
             lastSecondaryClipRef.current = clipName;
           } else {
-            animState.nextTriggerAt =
-              idleElapsedRef.current + randomAnimationInterval();
+            scheduleNextBaseAnimation(animState, idleElapsedRef.current);
           }
         }
       } else if (animState.mode === "returning") {
@@ -1021,9 +1070,7 @@ function AvatarModel({
             secondaryAction?.stop();
           }
 
-          animState.mode = "idle";
-          animState.currentSecondary = null;
-          animState.nextTriggerAt = idleElapsedRef.current + randomAnimationInterval();
+          finishBaseAnimationReturn(animState, idleElapsedRef.current);
         }
       }
     }
