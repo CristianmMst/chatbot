@@ -122,6 +122,7 @@ export default function AvatarExperience() {
     status,
     stopAll,
     transcript,
+    currentHint,
   } = useVoiceConversation();
   const speechTargetOverrides = useSpeechFacialAnimation({
     isSpeaking: status === "speaking",
@@ -245,6 +246,14 @@ export default function AvatarExperience() {
                 <p className="text-xs text-zinc-100/90 line-clamp-3">
                   {reply || "La respuesta sintetizada aparecera aqui."}
                 </p>
+                {currentHint && (
+                  <div className="mt-2 rounded-xl bg-amber-500/10 p-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-amber-300/80">
+                      Pista
+                    </p>
+                    <p className="text-xs text-amber-200/90">{currentHint}</p>
+                  </div>
+                )}
               </section>
             </div>
 

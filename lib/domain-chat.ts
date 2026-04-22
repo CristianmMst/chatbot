@@ -1,6 +1,6 @@
 import { getLlmClient } from "@/lib/llm-client";
 import { getLlmConfig } from "@/lib/llm-config";
-import { getSystemInstruction, type PromptMode } from "@/lib/prompts/system-instruction";
+import { getSystemInstruction, normalizePromptMode, type PromptMode } from "@/lib/prompts/system-instruction";
 
 export type ChatMessage = {
   content: string;
@@ -10,6 +10,7 @@ export type ChatMessage = {
 export type StructuredReply = {
   mood: "friendly" | "neutral" | "serious";
   reply: string;
+  hint: string | null;
 };
 
 export function sanitizeHistory(history: ChatMessage[] | undefined) {
@@ -104,9 +105,12 @@ function parseStructuredReply(payload: string): StructuredReply | null {
         ? parsed.mood
         : "neutral";
 
+    const hint = typeof parsed.hint === "string" ? parsed.hint : null;
+
     return {
       mood,
       reply,
+      hint,
     };
   } catch {
     return null;
@@ -180,7 +184,7 @@ function formatLlmError(error: unknown, provider: string): {
 export async function generateRestrictedReply(
   message: string,
   history: ChatMessage[],
-  options?: { mode?: PromptMode },
+  options?: { mode?: unknown },
 ): Promise<StructuredReply> {
   const client = getLlmClient();
 
@@ -189,8 +193,10 @@ export async function generateRestrictedReply(
   }
 
   const config = getLlmConfig();
-  const mode = options?.mode ?? "conversation";
   const instructionRole = config.provider === "gemini" ? "system" : "developer";
+  const mode: PromptMode = normalizePromptMode(options?.mode);
+  const systemInstruction = getSystemInstruction(mode);
+
   let completion;
 
   try {
@@ -200,7 +206,7 @@ export async function generateRestrictedReply(
       messages: [
         {
           role: instructionRole,
-          content: getSystemInstruction(mode),
+          content: systemInstruction,
         },
         ...history.map((item) => ({ content: item.content, role: item.role })),
         {
@@ -236,6 +242,7 @@ export async function generateRestrictedReply(
     return {
       mood: "neutral",
       reply: rawReply.trim() || "No pude interpretar una respuesta valida del modelo en este intento.",
+      hint: null,
     };
   }
 

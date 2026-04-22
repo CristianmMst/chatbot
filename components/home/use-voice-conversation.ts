@@ -31,11 +31,13 @@ type VoiceConversationState = {
   status: VoiceStatus;
   stopAll: () => void;
   transcript: string;
+  currentHint: string | null;
 };
 
 type ChatReplyPayload = {
   mood: "friendly" | "neutral" | "serious";
   reply: string;
+  hint: string | null;
 };
 
 type TtsPayload = {
@@ -122,9 +124,13 @@ function getSpeechErrorMessage(error: string) {
   }
 }
 
-async function requestChatReply(message: string, history: ConversationMessage[]) {
+async function requestChatReply(
+  message: string,
+  history: ConversationMessage[],
+  mode: "conversation" | "qa",
+) {
   const response = await fetch("/api/chat", {
-    body: JSON.stringify({ history, message }),
+    body: JSON.stringify({ history, message, mode }),
     headers: {
       "Content-Type": "application/json",
     },
@@ -144,7 +150,10 @@ async function requestChatReply(message: string, history: ConversationMessage[])
     );
   }
 
-  return payload.reply;
+  return {
+    reply: payload.reply,
+    hint: payload.hint,
+  };
 }
 
 async function requestSpeechAudio(text: string) {
@@ -226,6 +235,7 @@ export function useVoiceConversation(): VoiceConversationState {
   const [speechProgress, setSpeechProgress] = useState(0);
   const [speechStartedAt, setSpeechStartedAt] = useState<number | null>(null);
   const [speechBoundarySupported, setSpeechBoundarySupported] = useState(false);
+  const [currentHint, setCurrentHint] = useState<string | null>(null);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const activeAudioUrlRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -434,22 +444,27 @@ export function useVoiceConversation(): VoiceConversationState {
 
       void (async () => {
         try {
-          const nextReply = await requestChatReply(nextTranscript, historyRef.current);
-          setReply(nextReply);
+          const chatResponse = await requestChatReply(
+            nextTranscript,
+            historyRef.current,
+            "qa",
+          );
+          setReply(chatResponse.reply);
+          setCurrentHint(chatResponse.hint);
           setHistory((current) => {
             const nextHistory: ConversationMessage[] = [
               ...current,
               { content: nextTranscript, role: "user" },
-              { content: nextReply, role: "assistant" },
+              { content: chatResponse.reply, role: "assistant" },
             ];
 
             return nextHistory.slice(-6);
           });
 
-          const speechPayload = await requestSpeechAudio(nextReply);
+          const speechPayload = await requestSpeechAudio(chatResponse.reply);
           const cachedSpeech = {
             ...speechPayload,
-            text: nextReply,
+            text: chatResponse.reply,
           };
 
           lastSpeechRef.current = cachedSpeech;
@@ -495,6 +510,7 @@ export function useVoiceConversation(): VoiceConversationState {
     setSpeechText("");
     resetSpeechState();
     setTranscript("");
+    setCurrentHint(null);
     setStatus("listening");
 
     try {
@@ -537,6 +553,7 @@ export function useVoiceConversation(): VoiceConversationState {
     status: resolvedStatus,
     stopAll,
     transcript,
+    currentHint,
   };
 }
 
