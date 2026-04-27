@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import AvatarViewer from "@/components/scene/avatar-viewer";
 import {
   defaultFacialControls,
-  facialControlLabels,
-  facialPresets,
   type FacialControls,
 } from "@/lib/avatar-face";
 import {
@@ -13,10 +11,6 @@ import {
   type VoiceStatus,
 } from "@/components/home/use-voice-conversation";
 import { useSpeechFacialAnimation } from "@/components/home/use-speech-facial-animation";
-
-const facialControlKeys = Object.keys(defaultFacialControls) as Array<
-  keyof FacialControls
->;
 
 function getStatusCopy(status: VoiceStatus) {
   switch (status) {
@@ -74,35 +68,7 @@ function getVoiceFacialControls(
   }
 }
 
-function interpolateFacialControls(
-  from: FacialControls,
-  to: FacialControls,
-  progress: number,
-): FacialControls {
-  return {
-    smile: from.smile + (to.smile - from.smile) * progress,
-    browsUp: from.browsUp + (to.browsUp - from.browsUp) * progress,
-    browsDown: from.browsDown + (to.browsDown - from.browsDown) * progress,
-    blink: from.blink + (to.blink - from.blink) * progress,
-    jawOpen: from.jawOpen + (to.jawOpen - from.jawOpen) * progress,
-    frown: from.frown + (to.frown - from.frown) * progress,
-  };
-}
-
-function easeOutCubic(value: number) {
-  return 1 - Math.pow(1 - value, 3);
-}
-
 export default function AvatarExperience() {
-  const [isFacialControlMinimized, setIsFacialControlMinimized] =
-    useState(true);
-  const [manualFacialControls, setManualFacialControls] = useState(
-    defaultFacialControls,
-  );
-  const [animatedFacialControls, setAnimatedFacialControls] = useState(
-    defaultFacialControls,
-  );
-  const animatedFacialControlsRef = useRef(defaultFacialControls);
   const {
     analyserRef,
     audioRef,
@@ -133,46 +99,10 @@ export default function AvatarExperience() {
     speechStartedAt,
     speechText,
   });
-  const voiceFacialControls = useMemo(
+  const facialControls = useMemo(
     () => getVoiceFacialControls(status, status === "speaking" ? 0.08 : 0),
     [status],
   );
-  const facialControlTarget =
-    status === "idle" || status === "unsupported"
-      ? manualFacialControls
-      : voiceFacialControls;
-
-  useEffect(() => {
-    let frameId = 0;
-    let startTime = 0;
-    const duration = status === "speaking" ? 140 : 180;
-    const from = animatedFacialControlsRef.current;
-
-    const step = () => {
-      const progress = Math.min(1, (performance.now() - startTime) / duration);
-      const nextControls = interpolateFacialControls(
-        from,
-        facialControlTarget,
-        easeOutCubic(progress),
-      );
-
-      animatedFacialControlsRef.current = nextControls;
-      setAnimatedFacialControls(nextControls);
-
-      if (progress < 1) {
-        frameId = window.requestAnimationFrame(step);
-      }
-    };
-
-    startTime = performance.now();
-    frameId = window.requestAnimationFrame(step);
-
-    return () => {
-      window.cancelAnimationFrame(frameId);
-    };
-  }, [facialControlTarget, status]);
-
-  const facialControls = animatedFacialControls;
   const helperMessage =
     errorMessage ??
     (!hasResolvedSupport
@@ -180,13 +110,6 @@ export default function AvatarExperience() {
       : isSupported
         ? "Usa Chrome o Edge para la prueba mas estable. Pulsa el microfono y habla con naturalidad."
         : "Este navegador no expone una implementacion usable de Web Speech API para esta demo.");
-
-  function updateControl(control: keyof FacialControls, value: number) {
-    setManualFacialControls((current) => ({
-      ...current,
-      [control]: value,
-    }));
-  }
 
   return (
     <>
@@ -319,114 +242,6 @@ export default function AvatarExperience() {
         </div>
       </div>
 
-      <aside className="pointer-events-auto absolute inset-x-4 bottom-28 z-20 sm:inset-x-auto sm:bottom-8 sm:right-8 sm:w-80 transition-all duration-300">
-        <section className="rounded-3xl border border-white/10 bg-black/35 p-4 text-white shadow-2xl shadow-black/30 backdrop-blur-2xl">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-300/80">
-                Pruebas Faciales
-              </p>
-              <h2 className="mt-1 text-sm font-medium text-zinc-100">
-                Control manual del rostro
-              </h2>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                className="rounded-full border border-white/10 px-3 py-1 text-[11px] font-medium text-zinc-300 transition hover:border-white/20 hover:text-white"
-                onClick={() => setManualFacialControls(defaultFacialControls)}
-                type="button"
-                title="Resetear controles"
-              >
-                Reset
-              </button>
-              <button
-                className="flex h-6 w-6 items-center justify-center rounded-full border border-white/10 text-zinc-300 transition hover:border-white/20 hover:text-white"
-                onClick={() =>
-                  setIsFacialControlMinimized(!isFacialControlMinimized)
-                }
-                type="button"
-                title={
-                  isFacialControlMinimized
-                    ? "Maximizar panel"
-                    : "Minimizar panel"
-                }
-              >
-                {isFacialControlMinimized ? (
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <polyline points="18 15 12 9 6 15"></polyline>
-                  </svg>
-                ) : (
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                )}
-              </button>
-            </div>
-          </div>
-
-          <div
-            className={`transition-all duration-300 overflow-hidden ${isFacialControlMinimized ? "h-0 opacity-0 mt-0" : "h-auto opacity-100 mt-4"}`}
-          >
-            <div className="mb-4 flex flex-wrap gap-2">
-              {facialPresets.map((preset) => (
-                <button
-                  key={preset.label}
-                  className="rounded-full border border-white/10 px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition hover:border-cyan-300/40 hover:bg-cyan-300/10 hover:text-white"
-                  onClick={() => setManualFacialControls(preset.controls)}
-                  type="button"
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="space-y-3">
-              {facialControlKeys.map((control) => (
-                <label key={control} className="block">
-                  <div className="mb-1 flex items-center justify-between text-xs text-zinc-300">
-                    <span>{facialControlLabels[control]}</span>
-                    <span className="tabular-nums text-zinc-500">
-                      {manualFacialControls[control].toFixed(2)}
-                    </span>
-                  </div>
-                  <input
-                    aria-label={facialControlLabels[control]}
-                    className="h-2 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-cyan-300"
-                    max="1"
-                    min="0"
-                    onChange={(event) =>
-                      updateControl(control, Number(event.target.value))
-                    }
-                    step="0.01"
-                    type="range"
-                    value={manualFacialControls[control]}
-                  />
-                </label>
-              ))}
-            </div>
-          </div>
-        </section>
-      </aside>
     </>
   );
 }

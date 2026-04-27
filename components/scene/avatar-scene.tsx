@@ -4,6 +4,7 @@ import {
   Suspense,
   useEffect,
   useEffectEvent,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -13,7 +14,7 @@ import {
   useAnimations,
   useGLTF,
 } from "@react-three/drei";
-import { Box3, LoopOnce, LoopRepeat, MathUtils, Vector3 } from "three";
+import { AnimationClip, Box3, LoopOnce, LoopRepeat, MathUtils, Vector3 } from "three";
 import type { AnimationAction, Group, Mesh, Object3D } from "three";
 import {
   defaultFacialControls,
@@ -86,6 +87,12 @@ const TRIGGERED_ACTION_MAP = {
 } as const;
 
 const TALKING_CLIP = "Talking";
+
+const IDLE_BLOCKED_TRACK_PREFIXES = [
+  "mixamorig:Head.quaternion",
+  "mixamorig:Neck.quaternion",
+  "mixamorig:Spine2.quaternion",
+] as const;
 
 const JAW_CAP_BY_PROFILE: Record<SpeechVisemeProfile, number> = {
   closed: 0.08,
@@ -396,6 +403,25 @@ function collectMorphMeshes(root: Object3D) {
   return morphMeshes;
 }
 
+function sanitizeAnimationClips(clips: AnimationClip[]) {
+  return clips.map((clip) => {
+    if (clip.name !== BASE_ANIMATION_CONFIG.idle) {
+      return clip;
+    }
+
+    const filteredTracks = clip.tracks.filter(
+      (track) =>
+        !IDLE_BLOCKED_TRACK_PREFIXES.some((prefix) => track.name.startsWith(prefix)),
+    );
+
+    if (filteredTracks.length === clip.tracks.length) {
+      return clip;
+    }
+
+    return new AnimationClip(clip.name, clip.duration, filteredTracks);
+  });
+}
+
 function getTargetInfluences(facialControls: FacialControls) {
   const influences = Object.fromEntries(
     trackedFacialTargets.map((target) => [target, 0]),
@@ -457,7 +483,11 @@ function AvatarModel({
     0, 0, 0,
   ]);
   const { scene, animations } = useGLTF(siteConfig.modelPath);
-  const { actions, mixer } = useAnimations(animations, group);
+  const sanitizedAnimations = useMemo(
+    () => sanitizeAnimationClips(animations),
+    [animations],
+  );
+  const { actions, mixer } = useAnimations(sanitizedAnimations, group);
   const notifyFocusTargetChange = useEffectEvent(
     (target: [number, number, number]) => {
       onFocusTargetChange?.(target);
