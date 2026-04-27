@@ -47,29 +47,6 @@ type MorphMesh = Mesh & {
   morphTargetInfluences: number[];
 };
 
-type IdleRotationTargetKey =
-  | "head"
-  | "neck"
-  | "chest"
-  | "spine"
-  | "leftEye"
-  | "rightEye"
-  | "leftArm"
-  | "rightArm"
-  | "leftShoulder"
-  | "rightShoulder"
-  | "leftForeArm"
-  | "rightForeArm"
-  | "leftHand"
-  | "rightHand";
-
-type IdleRotationTarget = {
-  object: Object3D;
-  offset: { x: number; y: number; z: number };
-};
-
-type IdleRigTargets = Partial<Record<IdleRotationTargetKey, IdleRotationTarget>>;
-
 type BaseAnimationState = {
   mode: "idle" | "playing" | "returning";
   currentSecondary: string | null;
@@ -87,34 +64,9 @@ const SPEECH_DAMPING = 35;
 const AMPLITUDE_SMOOTHING = 0.6;
 const JAW_OPEN_SCALE = 0.4;
 const JAW_OPEN_MIN = 0.02;
-const IDLE_BREATH_SPEED = 0.15;
-const IDLE_HEAD_PITCH = 0.025;
-const IDLE_HEAD_YAW = 0.035;
-const IDLE_HEAD_ROLL = 0.012;
-const IDLE_NECK_PITCH = 0.015;
-const IDLE_CHEST_PITCH = 0.008;
-const IDLE_SMILE = 0.12;
-const IDLE_ARM_INWARD_YAW = 0.16;
-const IDLE_ARM_DROP = 0.32;
-const IDLE_ARM_ROLL = 0.06;
-const IDLE_FOREARM_SWING = 0.005;
-const IDLE_FOREARM_BEND = 0.22;
-const IDLE_HAND_RELAX = 0.1;
-const IDLE_EYE_YAW = 0.1;
-const IDLE_EYE_PITCH = 0.05;
-const IDLE_EYE_DAMPING = 2.5;
 const IDLE_BLINK_CLOSE_DURATION = 0.09;
 const IDLE_BLINK_OPEN_DURATION = 0.13;
 const IDLE_DOUBLE_BLINK_CHANCE = 0.15;
-const IDLE_EYE_RETARGET_MIN = 3.0;
-const IDLE_EYE_RETARGET_MAX = 6.0;
-const WEIGHT_SHIFT_SPEED = 0.18;
-const WEIGHT_SHIFT_YAW = 0.025;
-const WEIGHT_SHIFT_ROLL = 0.012;
-const SHOULDER_COUNTER_ROLL = 0.01;
-const CURIOUS_LOOK_MIN_INTERVAL = 8;
-const CURIOUS_LOOK_MAX_INTERVAL = 15;
-const CURIOUS_LOOK_DURATION = 4.0;
 
 const IDLE_VARIANTS = [
   { name: "LookAway.001", weight: 5 },
@@ -320,44 +272,6 @@ function randomBlinkInterval() {
   return MathUtils.randFloat(2.8, 5.6);
 }
 
-function randomEyeRetargetInterval() {
-  return MathUtils.randFloat(IDLE_EYE_RETARGET_MIN, IDLE_EYE_RETARGET_MAX);
-}
-
-function randomEyeTarget() {
-  return {
-    pitch: MathUtils.randFloatSpread(IDLE_EYE_PITCH * 2),
-    yaw: MathUtils.randFloatSpread(IDLE_EYE_YAW * 2),
-  };
-}
-
-interface CuriousLook {
-  startedAt: number;
-  duration: number;
-  yawTarget: number;
-  pitchTarget: number;
-  rollTarget: number;
-}
-
-interface CuriousPose {
-  head: { x: number; y: number; z: number };
-  neck: { x: number; y: number; z: number };
-  chest: { x: number; y: number; z: number };
-  spine: { x: number; y: number; z: number };
-}
-
-function easeInOutQuint(t: number) {
-  return t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
-}
-
-function easeOutQuint(t: number) {
-  return 1 - Math.pow(1 - t, 5);
-}
-
-function randomCuriousInterval() {
-  return MathUtils.randFloat(CURIOUS_LOOK_MIN_INTERVAL, CURIOUS_LOOK_MAX_INTERVAL);
-}
-
 function randomAnimationInterval() {
   return MathUtils.randFloat(
     BASE_ANIMATION_CONFIG.interval.min,
@@ -448,56 +362,6 @@ function finishBaseAnimationReturn(state: BaseAnimationState, now: number) {
   scheduleNextBaseAnimation(state, now);
 }
 
-function scheduleCuriousLook(elapsed: number): CuriousLook {
-  const direction = Math.random() > 0.5 ? 1 : -1;
-  const yawTarget = direction * MathUtils.randFloat(0.08, 0.15);
-  const pitchTarget = MathUtils.randFloat(0.02, 0.06);
-  const rollTarget = direction * MathUtils.randFloat(0.015, 0.035);
-
-  return { startedAt: elapsed, duration: CURIOUS_LOOK_DURATION, yawTarget, pitchTarget, rollTarget };
-}
-
-function computeCuriousOffset(currentTime: number, look: CuriousLook | null): CuriousPose {
-  const neutral: CuriousPose = {
-    head: { x: 0, y: 0, z: 0 },
-    neck: { x: 0, y: 0, z: 0 },
-    chest: { x: 0, y: 0, z: 0 },
-    spine: { x: 0, y: 0, z: 0 },
-  };
-
-  if (!look) return neutral;
-
-  const elapsed = currentTime - look.startedAt;
-  const t = MathUtils.clamp(elapsed / look.duration, 0, 1);
-
-  let influence: number;
-  if (t < 0.2) {
-    influence = easeOutQuint(t / 0.2);
-  } else if (t < 0.75) {
-    influence = 1;
-  } else {
-    influence = 1 - easeInOutQuint((t - 0.75) / 0.25);
-  }
-
-  const headYaw = look.yawTarget * influence;
-  const headPitch = look.pitchTarget * influence;
-  const headRoll = look.rollTarget * influence;
-
-  const neckYaw = look.yawTarget * 0.4 * influence;
-  const neckPitch = look.pitchTarget * 0.3 * influence;
-  const neckRoll = look.rollTarget * 0.35 * influence;
-
-  const chestYaw = look.yawTarget * 0.15 * influence;
-  const spineYaw = look.yawTarget * 0.08 * influence;
-
-  return {
-    head: { x: headPitch, y: headYaw, z: headRoll },
-    neck: { x: neckPitch, y: neckYaw, z: neckRoll },
-    chest: { x: 0, y: chestYaw, z: 0 },
-    spine: { x: 0, y: spineYaw, z: 0 },
-  };
-}
-
 function getBlinkInfluence(blinkElapsed: number | null) {
   if (blinkElapsed === null) {
     return 0;
@@ -514,121 +378,6 @@ function getBlinkInfluence(blinkElapsed: number | null) {
   }
 
   return 1 - MathUtils.smoothstep(openElapsed / IDLE_BLINK_OPEN_DURATION, 0, 1);
-}
-
-function findObjectByNameParts(root: Object3D, nameParts: string[]) {
-  const lowerNameParts = nameParts.map((part) => part.toLowerCase());
-  let match: Object3D | null = null;
-
-  root.traverse((object) => {
-    if (match) {
-      return;
-    }
-
-    const normalizedName = object.name.toLowerCase();
-
-    if (!normalizedName) {
-      return;
-    }
-
-    if (lowerNameParts.some((part) => normalizedName.includes(part))) {
-      match = object;
-    }
-  });
-
-  return match;
-}
-
-function resolveIdleRigTargets(root: Object3D): IdleRigTargets {
-  const head = root.getObjectByName("Head") ?? findObjectByNameParts(root, ["head", "streamoji_head"]);
-  const neck = root.getObjectByName("Neck") ?? findObjectByNameParts(root, ["neck"]);
-  const chest = root.getObjectByName("Spine2") ?? findObjectByNameParts(root, ["chest", "upperchest", "spine2", "spine_02"]);
-  const spine = root.getObjectByName("Spine1") ?? root.getObjectByName("Spine") ?? findObjectByNameParts(root, ["spine1", "spine", "spine_01"]);
-  const leftEye = root.getObjectByName("LeftEye") ?? findObjectByNameParts(root, ["lefteye", "eyeleft"]);
-  const rightEye = root.getObjectByName("RightEye") ?? findObjectByNameParts(root, ["righteye", "eyeright"]);
-  const leftArm = findObjectByNameParts(root, [
-    "leftarm",
-    "LeftArm",
-    "leftarm",
-    "upperarm_l",
-    "larm",
-    "leftupperarm",
-    "mixamorigleftarm",
-    "mixamorigleftupperarm",
-  ]);
-  const rightArm = findObjectByNameParts(root, [
-    "rightarm",
-    "RightArm",
-    "rightarm",
-    "upperarm_r",
-    "rarm",
-    "rightupperarm",
-    "mixamorigrightarm",
-    "mixamorigrightupperarm",
-  ]);
-  const leftShoulder = root.getObjectByName("LeftShoulder") ?? findObjectByNameParts(root, [
-    "leftshoulder",
-    "shoulder_l",
-    "lshoulder",
-    "mixamorigleftshoulder",
-  ]);
-  const rightShoulder = root.getObjectByName("RightShoulder") ?? findObjectByNameParts(root, [
-    "rightshoulder",
-    "shoulder_r",
-    "rshoulder",
-    "mixamorigrightshoulder",
-  ]);
-  const leftForeArm = root.getObjectByName("LeftForeArm") ?? findObjectByNameParts(root, [
-    "leftforearm",
-    "forearm_l",
-    "lforearm",
-    "leftlowerarm",
-    "mixamorigleftforearm",
-  ]);
-  const rightForeArm = root.getObjectByName("RightForeArm") ?? findObjectByNameParts(root, [
-    "rightforearm",
-    "forearm_r",
-    "rforearm",
-    "rightlowerarm",
-    "mixamorigrightforearm",
-  ]);
-  const leftHand = root.getObjectByName("LeftHand") ?? findObjectByNameParts(root, ["lefthand", "hand_l", "mixamoriglefthand"]);
-  const rightHand = root.getObjectByName("RightHand") ?? findObjectByNameParts(root, ["righthand", "hand_r", "mixamorigrighthand"]);
-
-  return Object.fromEntries(
-    Object.entries({
-      head,
-      neck,
-      chest,
-      spine,
-      leftEye,
-      rightEye,
-      leftArm,
-      rightArm,
-      leftShoulder,
-      rightShoulder,
-      leftForeArm,
-      rightForeArm,
-      leftHand,
-      rightHand,
-    })
-      .filter(([, object]) => object)
-      .map(([key, object]) => [key, { object, offset: { x: 0, y: 0, z: 0 } }]),
-  ) as IdleRigTargets;
-}
-
-function applyRotationOffset(
-  target: IdleRotationTarget | undefined,
-  nextOffset: { x: number; y: number; z: number },
-) {
-  if (!target) {
-    return;
-  }
-
-  target.object.rotation.x += nextOffset.x - target.offset.x;
-  target.object.rotation.y += nextOffset.y - target.offset.y;
-  target.object.rotation.z += nextOffset.z - target.offset.z;
-  target.offset = nextOffset;
 }
 
 function collectMorphMeshes(root: Object3D) {
@@ -693,18 +442,12 @@ function AvatarModel({
   status,
 }: AvatarModelProps) {
   const group = useRef<Group>(null);
-  const idleRigTargetsRef = useRef<IdleRigTargets>({});
   const morphMeshesRef = useRef<MorphMesh[]>([]);
   const smoothedAmplitudeRef = useRef(0);
   const idleElapsedRef = useRef(0);
   const nextBlinkAtRef = useRef(randomBlinkInterval());
   const blinkStartedAtRef = useRef<number | null>(null);
   const doubleBlinkPendingRef = useRef(false);
-  const nextEyeRetargetAtRef = useRef(randomEyeRetargetInterval());
-  const idleEyeTargetRef = useRef(randomEyeTarget());
-  const idleEyeCurrentRef = useRef({ pitch: 0, yaw: 0 });
-  const curiousLookRef = useRef<CuriousLook | null>(null);
-  const nextCuriousAtRef = useRef(randomCuriousInterval());
   const animStateRef = useRef<BaseAnimationState>(createInitialBaseAnimationState());
   const lastSecondaryClipRef = useRef<string | null>(null);
   const talkNextAtRef = useRef(0);
@@ -723,7 +466,6 @@ function AvatarModel({
 
   useEffect(() => {
     morphMeshesRef.current = collectMorphMeshes(scene);
-    idleRigTargetsRef.current = resolveIdleRigTargets(scene);
 
     // Ensure world matrices are computed before measuring bounds so that
     // skinned meshes and nested transforms contribute correctly.
@@ -859,23 +601,6 @@ function AvatarModel({
       }
     }
 
-    if (
-      curiousLookRef.current === null &&
-      idleElapsedRef.current >= nextCuriousAtRef.current
-    ) {
-      curiousLookRef.current = scheduleCuriousLook(idleElapsedRef.current);
-    }
-
-    if (
-      curiousLookRef.current !== null &&
-      idleElapsedRef.current > curiousLookRef.current.startedAt + curiousLookRef.current.duration
-    ) {
-      curiousLookRef.current = null;
-      nextCuriousAtRef.current = idleElapsedRef.current + randomCuriousInterval();
-    }
-
-    const curiousOffset = computeCuriousOffset(idleElapsedRef.current, curiousLookRef.current);
-
     if (audioRef?.current && mouthCues && mouthCues.length > 0) {
       const currentTime = audioRef.current.currentTime;
       const activeCue = getActiveMouthCue(mouthCues, currentTime);
@@ -914,151 +639,6 @@ function AvatarModel({
       merged.eyeBlinkLeft = Math.max(merged.eyeBlinkLeft ?? 0, idleBlink);
       merged.eyeBlinkRight = Math.max(merged.eyeBlinkRight ?? 0, idleBlink);
     }
-
-    merged.mouthSmileLeft = Math.max(merged.mouthSmileLeft ?? 0, IDLE_SMILE);
-    merged.mouthSmileRight = Math.max(merged.mouthSmileRight ?? 0, IDLE_SMILE);
-
-    if (idleElapsedRef.current >= nextEyeRetargetAtRef.current) {
-      idleEyeTargetRef.current = randomEyeTarget();
-      nextEyeRetargetAtRef.current = idleElapsedRef.current + randomEyeRetargetInterval();
-    }
-
-    const nextEyePitch = MathUtils.damp(
-      idleEyeCurrentRef.current.pitch,
-      idleBlink > 0.15 ? 0 : idleEyeTargetRef.current.pitch,
-      IDLE_EYE_DAMPING,
-      delta,
-    );
-    const nextEyeYaw = MathUtils.damp(
-      idleEyeCurrentRef.current.yaw,
-      idleBlink > 0.15 ? 0 : idleEyeTargetRef.current.yaw,
-      IDLE_EYE_DAMPING,
-      delta,
-    );
-
-    idleEyeCurrentRef.current = { pitch: nextEyePitch, yaw: nextEyeYaw };
-
-    const breathPhase = idleElapsedRef.current * Math.PI * 2 * IDLE_BREATH_SPEED;
-    const headPhase = idleElapsedRef.current;
-    const idleRigTargets = idleRigTargetsRef.current;
-    const softBreath = Math.sin(breathPhase);
-
-    const weightShift = Math.sin(headPhase * WEIGHT_SHIFT_SPEED + 0.3)
-      + Math.sin(headPhase * WEIGHT_SHIFT_SPEED * 0.67 + 1.8) * 0.4;
-
-    const headMicroPitch = Math.sin(headPhase * 0.25) * 0.6
-      + Math.sin(headPhase * 0.17 + 2.1) * 0.4;
-
-    const headMicroYaw = Math.sin(headPhase * 0.22 + 1.5) * 0.5
-      + Math.sin(headPhase * 0.13 + 0.8) * 0.5;
-
-    const headMicroRoll = Math.sin(headPhase * 0.19 + 0.5) * 0.55
-      + Math.sin(headPhase * 0.11 + 3.2) * 0.45;
-
-    applyRotationOffset(
-      idleRigTargets.spine,
-      {
-        x: softBreath * IDLE_CHEST_PITCH * 0.3,
-        y: weightShift * WEIGHT_SHIFT_YAW * 0.4 + curiousOffset.spine.y,
-        z: weightShift * WEIGHT_SHIFT_ROLL * 0.3 + curiousOffset.spine.z,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.chest,
-      {
-        x: 0.02 + softBreath * IDLE_CHEST_PITCH,
-        y: weightShift * WEIGHT_SHIFT_YAW * 0.65 + curiousOffset.chest.y,
-        z: weightShift * WEIGHT_SHIFT_ROLL * 0.5 + curiousOffset.chest.z,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.neck,
-      {
-        x: 0.01 + headMicroPitch * IDLE_NECK_PITCH * 0.65,
-        y: headMicroYaw * IDLE_HEAD_YAW * 0.45 + curiousOffset.neck.y,
-        z: headMicroRoll * IDLE_HEAD_ROLL * 0.55 + curiousOffset.neck.z,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.head,
-      {
-        x: 0.01 + headMicroPitch * IDLE_HEAD_PITCH + curiousOffset.head.x,
-        y: headMicroYaw * IDLE_HEAD_YAW + curiousOffset.head.y,
-        z: -0.015 + headMicroRoll * IDLE_HEAD_ROLL + curiousOffset.head.z,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.leftEye,
-      { x: nextEyePitch, y: nextEyeYaw, z: 0 },
-    );
-    applyRotationOffset(
-      idleRigTargets.rightEye,
-      { x: nextEyePitch, y: nextEyeYaw, z: 0 },
-    );
-    applyRotationOffset(
-      idleRigTargets.leftShoulder,
-      {
-        x: -0.06 + softBreath * SHOULDER_COUNTER_ROLL * 0.5,
-        y: 0.03 - weightShift * WEIGHT_SHIFT_YAW * 0.25,
-        z: 0.025,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.rightShoulder,
-      {
-        x: -0.06 + softBreath * SHOULDER_COUNTER_ROLL * 0.5,
-        y: -0.03 - weightShift * WEIGHT_SHIFT_YAW * 0.25,
-        z: -0.025,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.leftArm,
-      {
-        x: IDLE_ARM_DROP + softBreath * 0.008,
-        y: IDLE_ARM_INWARD_YAW,
-        z: IDLE_ARM_ROLL,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.rightArm,
-      {
-        x: IDLE_ARM_DROP + softBreath * 0.008,
-        y: -IDLE_ARM_INWARD_YAW,
-        z: -IDLE_ARM_ROLL,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.leftForeArm,
-      {
-        x: IDLE_FOREARM_BEND + softBreath * IDLE_FOREARM_SWING * 0.3,
-        y: 0.015,
-        z: 0.028,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.rightForeArm,
-      {
-        x: IDLE_FOREARM_BEND + softBreath * IDLE_FOREARM_SWING * 0.3,
-        y: -0.015,
-        z: -0.028,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.leftHand,
-      {
-        x: 0.02,
-        y: 0.03,
-        z: IDLE_HAND_RELAX,
-      },
-    );
-    applyRotationOffset(
-      idleRigTargets.rightHand,
-      {
-        x: 0.02,
-        y: -0.03,
-        z: -IDLE_HAND_RELAX,
-      },
-    );
 
     for (const mesh of morphMeshesRef.current) {
       for (const targetName of trackedFacialTargets) {
