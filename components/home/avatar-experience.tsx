@@ -123,6 +123,7 @@ export default function AvatarExperience() {
     stopAll,
     transcript,
     currentHint,
+    lastAction,
   } = useVoiceConversation();
   const speechTargetOverrides = useSpeechFacialAnimation({
     isSpeaking: status === "speaking",
@@ -191,11 +192,13 @@ export default function AvatarExperience() {
     <>
       <div className="absolute inset-0 z-0">
         <AvatarViewer
+          action={lastAction}
           analyserRef={analyserRef}
           audioRef={audioRef}
           facialControls={facialControls}
           facialTargetOverrides={speechTargetOverrides}
           mouthCues={mouthCues}
+          status={status}
         />
       </div>
 

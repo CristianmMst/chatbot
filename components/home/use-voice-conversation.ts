@@ -32,12 +32,14 @@ type VoiceConversationState = {
   stopAll: () => void;
   transcript: string;
   currentHint: string | null;
+  lastAction: string | null;
 };
 
 type ChatReplyPayload = {
   mood: "friendly" | "neutral" | "serious";
   reply: string;
   hint: string | null;
+  action?: string | null;
 };
 
 type TtsPayload = {
@@ -153,6 +155,7 @@ async function requestChatReply(
   return {
     reply: payload.reply,
     hint: payload.hint,
+    action: payload.action ?? null,
   };
 }
 
@@ -236,6 +239,7 @@ export function useVoiceConversation(): VoiceConversationState {
   const [speechStartedAt, setSpeechStartedAt] = useState<number | null>(null);
   const [speechBoundarySupported, setSpeechBoundarySupported] = useState(false);
   const [currentHint, setCurrentHint] = useState<string | null>(null);
+  const [lastAction, setLastAction] = useState<string | null>(null);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const activeAudioUrlRef = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -451,6 +455,7 @@ export function useVoiceConversation(): VoiceConversationState {
           );
           setReply(chatResponse.reply);
           setCurrentHint(chatResponse.hint);
+          setLastAction(chatResponse.action ?? null);
           setHistory((current) => {
             const nextHistory: ConversationMessage[] = [
               ...current,
@@ -511,6 +516,7 @@ export function useVoiceConversation(): VoiceConversationState {
     resetSpeechState();
     setTranscript("");
     setCurrentHint(null);
+    setLastAction(null);
     setStatus("listening");
 
     try {
@@ -527,6 +533,7 @@ export function useVoiceConversation(): VoiceConversationState {
 
     stopCurrentAudio();
     resetSpeechState();
+    setLastAction(null);
     setStatus(isSupported ? "idle" : "unsupported");
   }
 
@@ -554,6 +561,7 @@ export function useVoiceConversation(): VoiceConversationState {
     stopAll,
     transcript,
     currentHint,
+    lastAction,
   };
 }
 

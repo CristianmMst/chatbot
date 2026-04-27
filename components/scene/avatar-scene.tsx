@@ -26,13 +26,16 @@ import {
 import { siteConfig } from "@/lib/site";
 import type { MouthCue, MouthCueValue } from "@/lib/lip-sync";
 import type { SpeechVisemeProfile } from "@/components/home/use-speech-facial-animation";
+import type { VoiceStatus } from "@/components/home/use-voice-conversation";
 
 type AvatarSceneProps = {
+  action?: string | null;
   analyserRef?: React.RefObject<AnalyserNode | null>;
   audioRef?: React.RefObject<HTMLAudioElement | null>;
   facialControls?: FacialControls;
   facialTargetOverrides?: FacialTargetOverrides;
   mouthCues?: MouthCue[];
+  status?: VoiceStatus;
 };
 
 type AvatarModelProps = AvatarSceneProps & {
@@ -113,19 +116,24 @@ const CURIOUS_LOOK_MIN_INTERVAL = 8;
 const CURIOUS_LOOK_MAX_INTERVAL = 15;
 const CURIOUS_LOOK_DURATION = 4.0;
 
+const IDLE_VARIANTS = [
+  { name: "LookAway.001", weight: 5 },
+  { name: "NeckStretching.001", weight: 3 },
+  { name: "Petting.001", weight: 2 },
+] satisfies WeightedClipConfig[];
+
 const BASE_ANIMATION_CONFIG = {
   idle: "Idle.001",
-  variants: [
-    { name: "LookAway.001", weight: 5 },
-    { name: "NeckStretching.001", weight: 3 },
-    { name: "Petting.001", weight: 2 },
-  ] satisfies WeightedClipConfig[],
-  interval: {
-    min: 8,
-    max: 20,
-  },
+  interval: { min: 8, max: 20 },
   fade: 0.5,
 } as const;
+
+const TRIGGERED_ACTION_MAP = {
+  wave: "Waving",
+  deny: "ShakingHeadNo",
+} as const;
+
+const TALKING_CLIP = "Talking";
 
 const JAW_CAP_BY_PROFILE: Record<SpeechVisemeProfile, number> = {
   closed: 0.08,
@@ -675,12 +683,14 @@ function mergeTargetInfluences(
 }
 
 function AvatarModel({
+  action,
   analyserRef,
   audioRef,
   facialControls = defaultFacialControls,
   facialTargetOverrides,
   mouthCues,
   onFocusTargetChange,
+  status,
 }: AvatarModelProps) {
   const group = useRef<Group>(null);
   const idleRigTargetsRef = useRef<IdleRigTargets>({});
@@ -697,6 +707,9 @@ function AvatarModel({
   const nextCuriousAtRef = useRef(randomCuriousInterval());
   const animStateRef = useRef<BaseAnimationState>(createInitialBaseAnimationState());
   const lastSecondaryClipRef = useRef<string | null>(null);
+  const talkNextAtRef = useRef(0);
+  const wasSpeakingRef = useRef(false);
+  const lastActionRef = useRef<string | null>(null);
   const [modelOffset, setModelOffset] = useState<[number, number, number]>([
     0, 0, 0,
   ]);
@@ -784,6 +797,31 @@ function AvatarModel({
       }
     };
   }, [actions, mixer]);
+
+  useEffect(() => {
+    if (!action || !mixer) return;
+    if (action === lastActionRef.current) return;
+    lastActionRef.current = action;
+
+    const clipName = TRIGGERED_ACTION_MAP[action as keyof typeof TRIGGERED_ACTION_MAP];
+    if (!clipName) return;
+
+    const idleAction = actions[BASE_ANIMATION_CONFIG.idle];
+    const secondaryAction = actions[clipName];
+    if (!idleAction || !secondaryAction) return;
+
+    // Interrupt any currently playing secondary animation
+    if (animStateRef.current.currentSecondary) {
+      const currentSecondary = actions[animStateRef.current.currentSecondary];
+      if (currentSecondary && animStateRef.current.mode === "playing") {
+        returnSecondaryToIdle(idleAction, currentSecondary);
+      }
+    }
+
+    playSecondaryFromIdle(idleAction, secondaryAction);
+    animStateRef.current.mode = "playing";
+    animStateRef.current.currentSecondary = clipName;
+  }, [action, actions, mixer]);
 
   useFrame((_, delta) => {
     let speechOverrides: FacialTargetOverrides = {};
@@ -1045,32 +1083,68 @@ function AvatarModel({
     if (idleAction) {
       const animState = animStateRef.current;
 
-      if (animState.mode === "idle") {
-        if (idleElapsedRef.current >= animState.nextTriggerAt) {
-          const clipName = pickWeightedRandomClip(
-            BASE_ANIMATION_CONFIG.variants,
-            lastSecondaryClipRef.current ?? undefined,
-          );
-          const secondaryAction = actions[clipName];
-
+      // Interrupt idle variants when avatar is listening, processing, or speaking
+      if (status !== "idle" && animState.mode === "playing" && animState.currentSecondary) {
+        const isIdleVariant = IDLE_VARIANTS.some((v) => v.name === animState.currentSecondary);
+        if (isIdleVariant) {
+          const secondaryAction = actions[animState.currentSecondary];
           if (secondaryAction) {
-            playSecondaryFromIdle(idleAction, secondaryAction);
-
-            animState.mode = "playing";
-            animState.currentSecondary = clipName;
-            lastSecondaryClipRef.current = clipName;
-          } else {
-            scheduleNextBaseAnimation(animState, idleElapsedRef.current);
+            returnSecondaryToIdle(idleAction, secondaryAction);
+            beginBaseAnimationReturn(animState, idleElapsedRef.current);
           }
         }
-      } else if (animState.mode === "returning") {
-        if (idleElapsedRef.current >= animState.cooldownEndAt) {
-          if (animState.currentSecondary) {
-            const secondaryAction = actions[animState.currentSecondary];
-            secondaryAction?.stop();
-          }
+      }
 
-          finishBaseAnimationReturn(animState, idleElapsedRef.current);
+      // Random talking gesture during speaking
+      const isSpeaking = status === "speaking";
+      if (isSpeaking && !wasSpeakingRef.current) {
+        talkNextAtRef.current = idleElapsedRef.current + MathUtils.randFloat(3, 7);
+      }
+      wasSpeakingRef.current = isSpeaking;
+
+      if (isSpeaking) {
+        if (idleElapsedRef.current >= talkNextAtRef.current) {
+          if (animState.mode === "idle") {
+            const talkAction = actions[TALKING_CLIP];
+            if (talkAction) {
+              playSecondaryFromIdle(idleAction, talkAction);
+              animState.mode = "playing";
+              animState.currentSecondary = TALKING_CLIP;
+            }
+          }
+          talkNextAtRef.current = idleElapsedRef.current + MathUtils.randFloat(4, 10);
+        }
+      }
+
+      // Idle variants only when status is idle
+      if (status === "idle") {
+        if (animState.mode === "idle") {
+          if (idleElapsedRef.current >= animState.nextTriggerAt) {
+            const clipName = pickWeightedRandomClip(
+              IDLE_VARIANTS,
+              lastSecondaryClipRef.current ?? undefined,
+            );
+            const secondaryAction = actions[clipName];
+
+            if (secondaryAction) {
+              playSecondaryFromIdle(idleAction, secondaryAction);
+
+              animState.mode = "playing";
+              animState.currentSecondary = clipName;
+              lastSecondaryClipRef.current = clipName;
+            } else {
+              scheduleNextBaseAnimation(animState, idleElapsedRef.current);
+            }
+          }
+        } else if (animState.mode === "returning") {
+          if (idleElapsedRef.current >= animState.cooldownEndAt) {
+            if (animState.currentSecondary) {
+              const secondaryAction = actions[animState.currentSecondary];
+              secondaryAction?.stop();
+            }
+
+            finishBaseAnimationReturn(animState, idleElapsedRef.current);
+          }
         }
       }
     }
@@ -1108,11 +1182,13 @@ function SceneLights() {
 }
 
 export default function AvatarScene({
+  action,
   analyserRef,
   audioRef,
   facialControls,
   facialTargetOverrides,
   mouthCues,
+  status,
 }: AvatarSceneProps) {
   const [focusTarget, setFocusTarget] = useState<[number, number, number]>([
     0, 1.64, 0.01,
@@ -1124,12 +1200,14 @@ export default function AvatarScene({
         <SceneLights />
         <Suspense fallback={null}>
           <AvatarModel
+            action={action}
             analyserRef={analyserRef}
             audioRef={audioRef}
             facialControls={facialControls}
             facialTargetOverrides={facialTargetOverrides}
             mouthCues={mouthCues}
             onFocusTargetChange={setFocusTarget}
+            status={status}
           />
         </Suspense>
         <OrbitControls

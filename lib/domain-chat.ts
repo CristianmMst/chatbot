@@ -7,10 +7,13 @@ export type ChatMessage = {
   role: "assistant" | "user";
 };
 
+export type AvatarAction = "wave" | "deny" | "talk";
+
 export type StructuredReply = {
   mood: "friendly" | "neutral" | "serious";
   reply: string;
   hint: string | null;
+  action?: AvatarAction | null;
 };
 
 export function sanitizeHistory(history: ChatMessage[] | undefined) {
@@ -82,6 +85,10 @@ function formatStructuredFields(parsed: Record<string, unknown>): string | null 
   return Array.from(new Set(parts)).join(". ");
 }
 
+function isValidAction(value: unknown): value is AvatarAction {
+  return value === "wave" || value === "deny" || value === "talk";
+}
+
 function parseStructuredReply(payload: string): StructuredReply | null {
   try {
     const parsed = JSON.parse(payload) as Partial<StructuredReply> & Record<string, unknown>;
@@ -106,11 +113,13 @@ function parseStructuredReply(payload: string): StructuredReply | null {
         : "neutral";
 
     const hint = typeof parsed.hint === "string" ? parsed.hint : null;
+    const action = isValidAction(parsed.action) ? parsed.action : null;
 
     return {
       mood,
       reply,
       hint,
+      action,
     };
   } catch {
     return null;
